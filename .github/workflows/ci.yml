@@ -18,6 +18,8 @@ jobs:
           go build -o embedcache ./cmd/embedcache
           go run ./experiments/harness -bin ./embedcache -out EXPERIMENTS.ci.md
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: experiments-report
           path: EXPERIMENTS.ci.md
+          if-no-files-found: ignore
