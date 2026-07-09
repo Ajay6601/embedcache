@@ -7,14 +7,17 @@ import (
 	"encoding/gob"
 	"os"
 	"sync"
+	"time"
 )
 
 // Entry is one cached embedding: the raw JSON value of the "embedding" field
 // exactly as the upstream returned it, plus the token count attributed to
-// computing it (used for savings accounting).
+// computing it (used for savings accounting). ExpiresAt is unix nanoseconds;
+// zero means the entry never expires.
 type Entry struct {
-	Raw    []byte
-	Tokens int
+	Raw       []byte
+	Tokens    int
+	ExpiresAt int64
 }
 
 const shardCount = 16
@@ -71,8 +74,15 @@ func (c *Cache) Get(key string) (Entry, bool) {
 	if !ok {
 		return Entry{}, false
 	}
+	item := el.Value.(*lruItem)
+	if item.entry.ExpiresAt > 0 && time.Now().UnixNano() > item.entry.ExpiresAt {
+		s.ll.Remove(el)
+		delete(s.items, key)
+		s.bytes -= int64(len(item.entry.Raw))
+		return Entry{}, false
+	}
 	s.ll.MoveToFront(el)
-	return el.Value.(*lruItem).entry, true
+	return item.entry, true
 }
 
 func (c *Cache) Set(key string, e Entry) {

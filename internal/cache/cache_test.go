@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestGetSet(t *testing.T) {
@@ -50,6 +51,26 @@ func TestLRUOrder(t *testing.T) {
 	}
 	if _, ok := c.Get("b"); !ok {
 		t.Fatal("b lost")
+	}
+}
+
+func TestTTLExpiry(t *testing.T) {
+	c := New(0, 0)
+	c.Set("forever", Entry{Raw: []byte("[1]")})
+	c.Set("brief", Entry{Raw: []byte("[2]"), ExpiresAt: time.Now().Add(30 * time.Millisecond).UnixNano()})
+
+	if _, ok := c.Get("brief"); !ok {
+		t.Fatal("entry must be servable before expiry")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, ok := c.Get("brief"); ok {
+		t.Fatal("expired entry must miss")
+	}
+	if _, ok := c.Get("forever"); !ok {
+		t.Fatal("zero ExpiresAt must never expire")
+	}
+	if c.Len() != 1 {
+		t.Fatalf("expired entry must be evicted on read, len=%d", c.Len())
 	}
 }
 
