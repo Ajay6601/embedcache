@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"embedcache/internal/api"
+	"embedcache/internal/auth"
 	"embedcache/internal/cache"
 	"embedcache/internal/fingerprint"
 	"embedcache/internal/mockllm"
@@ -252,6 +254,118 @@ func TestUpstreamErrorPassthrough(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("rate limited")) {
 		t.Fatalf("upstream error body not forwarded: %s", body)
+	}
+}
+
+func TestAllowlistGuardsHitsAndMisses(t *testing.T) {
+	s := newStack(t)
+	authorizer, err := auth.New(auth.ModeAllowlist, []string{"sk-good"}, "", 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// rebuild the proxy handler with auth enabled
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	p.Auth = authorizer
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	post := func(key string) int {
+		b, _ := json.Marshal(map[string]any{"model": "m1", "input": "guarded"})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/embeddings", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post(""); code != 401 {
+		t.Fatalf("no key: %d, want 401", code)
+	}
+	if code := post("sk-evil"); code != 401 {
+		t.Fatalf("wrong key: %d, want 401", code)
+	}
+	if code := post("sk-good"); code != 200 {
+		t.Fatalf("good key miss: %d, want 200", code)
+	}
+	// the critical case: the entry is now CACHED; a bad key must still not
+	// be able to read it
+	if code := post("sk-evil"); code != 401 {
+		t.Fatalf("wrong key on cache hit: %d, want 401", code)
+	}
+	if code := post("sk-good"); code != 200 {
+		t.Fatalf("good key hit: %d, want 200", code)
+	}
+}
+
+func TestBodySizeLimit(t *testing.T) {
+	s := newStack(t)
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	p.MaxBody = 256
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	big := strings.Repeat("x", 500)
+	b, _ := json.Marshal(map[string]any{"model": "m1", "input": big})
+	resp, err := http.Post(srv.URL+"/v1/embeddings", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body: %d, want 413", resp.StatusCode)
+	}
+}
+
+func TestBatchItemLimit(t *testing.T) {
+	s := newStack(t)
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	p.MaxBatchItems = 4
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	b, _ := json.Marshal(map[string]any{"model": "m1", "input": []string{"a", "b", "c", "d", "e"}})
+	resp, err := http.Post(srv.URL+"/v1/embeddings", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("oversized batch: %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestCacheTTLEndToEnd(t *testing.T) {
+	s := newStack(t)
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	p.CacheTTL = 40 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	_, r1 := embed(t, srv.URL, map[string]any{"model": "m1", "input": "ttl probe"})
+	if r1.Header.Get("X-Embedcache-Status") != "miss" {
+		t.Fatal("first must miss")
+	}
+	_, r2 := embed(t, srv.URL, map[string]any{"model": "m1", "input": "ttl probe"})
+	if r2.Header.Get("X-Embedcache-Status") != "hit" {
+		t.Fatal("within TTL must hit")
+	}
+	time.Sleep(60 * time.Millisecond)
+	_, r3 := embed(t, srv.URL, map[string]any{"model": "m1", "input": "ttl probe"})
+	if r3.Header.Get("X-Embedcache-Status") != "miss" {
+		t.Fatalf("after TTL must miss, got %q", r3.Header.Get("X-Embedcache-Status"))
 	}
 }
 

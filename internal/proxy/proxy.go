@@ -19,8 +19,10 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"embedcache/internal/api"
+	"embedcache/internal/auth"
 	"embedcache/internal/cache"
 	"embedcache/internal/coalesce"
 	"embedcache/internal/fingerprint"
@@ -28,8 +30,6 @@ import (
 	"embedcache/internal/tokens"
 	"embedcache/internal/upstream"
 )
-
-const maxBodyBytes = 64 << 20
 
 var errLeaderAborted = errors.New("the request computing this embedding was aborted")
 
@@ -39,6 +39,15 @@ type Proxy struct {
 	Upstream *upstream.Client
 	Stats    *stats.Collector
 	Norm     fingerprint.Normalizer
+
+	// Auth validates client keys before any cache read; nil means off.
+	Auth *auth.Authorizer
+	// CacheTTL bounds how long an entry may be served; 0 = forever.
+	CacheTTL time.Duration
+	// MaxBatchItems rejects oversized batches; 0 = unlimited.
+	MaxBatchItems int
+	// MaxBody rejects oversized request bodies.
+	MaxBody int64
 
 	logMu      sync.Mutex
 	requestLog *os.File
@@ -51,6 +60,7 @@ func New(c *cache.Cache, up *upstream.Client, st *stats.Collector, norm fingerpr
 		Upstream: up,
 		Stats:    st,
 		Norm:     norm,
+		MaxBody:  64 << 20,
 	}
 }
 
@@ -59,9 +69,21 @@ func New(c *cache.Cache, up *upstream.Client, st *stats.Collector, norm fingerpr
 func (p *Proxy) SetRequestLog(f *os.File) { p.requestLog = f }
 
 func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if p.Auth != nil {
+		if ok, reason := p.Auth.Allow(r.Context(), r.Header.Get("Authorization")); !ok {
+			p.Stats.RecordError()
+			writeError(w, http.StatusUnauthorized, reason)
+			return
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, p.MaxBody+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		p.Stats.RecordError()
+		return
+	}
+	if int64(len(body)) > p.MaxBody {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d bytes", p.MaxBody))
 		p.Stats.RecordError()
 		return
 	}
@@ -79,6 +101,11 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	items, err := api.SplitInput(req.Input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		p.Stats.RecordError()
+		return
+	}
+	if p.MaxBatchItems > 0 && len(items) > p.MaxBatchItems {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("batch of %d items exceeds the limit of %d", len(items), p.MaxBatchItems))
 		p.Stats.RecordError()
 		return
 	}
@@ -156,8 +183,12 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 				respModel = uresp.Model
 			}
 			perItem := tokens.Apportion(uresp.Usage.PromptTokens, ownedItems)
+			var expires int64
+			if p.CacheTTL > 0 {
+				expires = time.Now().Add(p.CacheTTL).UnixNano()
+			}
 			for j, k := range owned {
-				e := cache.Entry{Raw: uresp.Data[j].Embedding, Tokens: perItem[j]}
+				e := cache.Entry{Raw: uresp.Data[j].Embedding, Tokens: perItem[j], ExpiresAt: expires}
 				p.Cache.Set(k, e)
 				p.Group.Fulfill(k, e)
 				delete(pending, k)
