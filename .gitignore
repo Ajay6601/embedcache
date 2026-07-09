@@ -1,0 +1,5 @@
+embedcache
+embedcache.exe
+*.snap
+*.gob
+e5-requests.jsonl
