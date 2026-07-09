@@ -5,6 +5,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,7 +22,10 @@ type Server struct {
 	Proxy   *proxy.Proxy
 	Stats   *stats.Collector
 	Pricing *pricing.Table
-	rp      *httputil.ReverseProxy
+	// AdminToken guards stats/report/metrics/flush when set. healthz stays
+	// open for load-balancer probes.
+	AdminToken string
+	rp         *httputil.ReverseProxy
 }
 
 func New(p *proxy.Proxy, st *stats.Collector, table *pricing.Table, upstreamBase *url.URL) *Server {
@@ -33,9 +37,30 @@ func New(p *proxy.Proxy, st *stats.Collector, table *pricing.Table, upstreamBase
 	}
 }
 
+func (s *Server) adminOK(r *http.Request) bool {
+	if s.AdminToken == "" {
+		return true
+	}
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return subtle.ConstantTimeCompare([]byte(tok), []byte(s.AdminToken)) == 1
+}
+
+func denyAdmin(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	w.Write([]byte(`{"error":{"message":"admin token required","type":"embedcache_error"}}`))
+}
+
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		admin := path == "/_ec/stats" || path == "/stats" ||
+			path == "/_ec/report" || path == "/report" ||
+			path == "/_ec/flush" || path == "/metrics"
+		if admin && !s.adminOK(r) {
+			denyAdmin(w)
+			return
+		}
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/embeddings"):
 			s.Proxy.ServeEmbeddings(w, r)
