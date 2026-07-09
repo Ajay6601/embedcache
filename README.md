@@ -50,6 +50,16 @@ client.embeddings.create(model="text-embedding-3-small", input=["hello"])
 
 Your `Authorization` header is forwarded to the upstream (or pin one with `-upstream-api-key`). Non-embedding routes pass through untouched, so it can front a full OpenAI-compatible server.
 
+**Verified live** (all `experiments/livecheck` assertions pass — byte-exact replay, mixed-batch mapping, coalescing, base64):
+
+| backend | upstream flag | verified model |
+|---|---|---|
+| Ollama 0.22 | `-upstream http://localhost:11434` | `all-minilm` |
+| Google Gemini | `-upstream https://generativelanguage.googleapis.com/v1beta/openai -upstream-api-key $GEMINI_API_KEY` | `gemini-embedding-001` (3072-dim) |
+| OpenAI | `-upstream https://api.openai.com` | wire-identical to the above |
+
+Groq is not applicable: its API has no embeddings endpoint (chat/audio only).
+
 Every response tells you what happened:
 
 ```
