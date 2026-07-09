@@ -83,6 +83,30 @@ func TestFlushRequiresToken(t *testing.T) {
 	}
 }
 
+func TestSnapshotEndpoint(t *testing.T) {
+	srv := newTestServer(t, "secret-token")
+	// not configured -> 400 even with a valid token
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_ec/snapshot", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("snapshot without persistence: %d, want 400", resp.StatusCode)
+	}
+	// guarded like other admin routes
+	resp2, err := http.Post(srv.URL+"/_ec/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != 401 {
+		t.Fatalf("snapshot without token: %d, want 401", resp2.StatusCode)
+	}
+}
+
 func TestHealthzAlwaysOpen(t *testing.T) {
 	srv := newTestServer(t, "secret-token")
 	if code := get(t, srv.URL+"/healthz", ""); code != 200 {

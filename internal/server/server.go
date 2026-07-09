@@ -25,7 +25,9 @@ type Server struct {
 	// AdminToken guards stats/report/metrics/flush when set. healthz stays
 	// open for load-balancer probes.
 	AdminToken string
-	rp         *httputil.ReverseProxy
+	// SnapshotPath enables POST /_ec/snapshot; set from -persist.
+	SnapshotPath string
+	rp           *httputil.ReverseProxy
 }
 
 func New(p *proxy.Proxy, st *stats.Collector, table *pricing.Table, upstreamBase *url.URL) *Server {
@@ -56,7 +58,7 @@ func (s *Server) Handler() http.Handler {
 		path := r.URL.Path
 		admin := path == "/_ec/stats" || path == "/stats" ||
 			path == "/_ec/report" || path == "/report" ||
-			path == "/_ec/flush" || path == "/metrics"
+			path == "/_ec/flush" || path == "/_ec/snapshot" || path == "/metrics"
 		if admin && !s.adminOK(r) {
 			denyAdmin(w)
 			return
@@ -72,6 +74,19 @@ func (s *Server) Handler() http.Handler {
 			n := s.Proxy.Cache.Flush()
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"flushed":%d}`, n)
+		case path == "/_ec/snapshot" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			if s.SnapshotPath == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":{"message":"persistence not configured; start with -persist","type":"embedcache_error"}}`))
+				return
+			}
+			if err := s.Proxy.Cache.Snapshot(s.SnapshotPath); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, `{"error":{"message":%q,"type":"embedcache_error"}}`, err.Error())
+				return
+			}
+			fmt.Fprintf(w, `{"snapshotted":%d}`, s.Proxy.Cache.Len())
 		case path == "/metrics":
 			s.serveMetrics(w)
 		case path == "/healthz":

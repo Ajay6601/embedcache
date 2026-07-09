@@ -161,6 +161,7 @@ func runServe(args []string) error {
 
 	websrv := server.New(p, st, table, up.Base)
 	websrv.AdminToken = *adminToken
+	websrv.SnapshotPath = *persist
 	srv := &http.Server{
 		Addr:    *listen,
 		Handler: websrv.Handler(),
