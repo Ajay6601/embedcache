@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - name: experiments
+        run: |
+          go build -o embedcache ./cmd/embedcache
+          go run ./experiments/harness -bin ./embedcache -out EXPERIMENTS.ci.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experiments-report
+          path: EXPERIMENTS.ci.md
