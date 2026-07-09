@@ -103,6 +103,21 @@ A running proxy serves the same accounting live: `embedcache report`, or `GET /_
 - **No semantic caching.** Similarity-threshold response caching returns *wrong answers* at some rate; that trade-off belongs to chat responses, not embeddings. Exact-match embedding caching has a 0% wrong-answer rate by construction.
 - **Failure containment.** Upstream errors pass through verbatim and are never cached; a crashed leader fails its coalesced waiters instead of hanging them.
 
+## Security
+
+For anything beyond a trusted network, turn on both layers:
+
+```bash
+embedcache serve -upstream http://localhost:8000 \
+  -admin-token  "$(openssl rand -hex 24)" \   # guards /stats, /report, /metrics, /_ec/flush
+  -auth-mode    allowlist -api-keys-file keys.txt \
+  -ttl          720h                           # bound staleness if model weights change
+```
+
+- **`-admin-token`** — without it, anyone who can reach the port can flush your cache and read usage stats. `/healthz` stays open for probes.
+- **`-auth-mode`** — cache hits never touch the upstream, so without this a revoked or missing key can still read cached vectors. `allowlist` is for self-hosted backends (the proxy owns the key list); `verify` is for hosted providers — the caller's key is checked against the upstream (`GET /v1/models`) and the verdict cached for `-auth-cache-ttl` (default 5m, negative verdicts 1m, fail-closed on upstream outage).
+- Terminate TLS in front (Caddy, nginx, or your ingress); embedcache listens in plaintext.
+
 ## Serve flags
 
 | flag | default | |
@@ -110,6 +125,13 @@ A running proxy serves the same accounting live: `embedcache report`, or `GET /_
 | `-listen` | `:8090` | bind address |
 | `-upstream` | — | required; base URL of the backend |
 | `-upstream-api-key` | forward client's | pin an upstream key |
+| `-admin-token` | open | bearer token for admin endpoints |
+| `-auth-mode` | `off` | client key validation: `allowlist` / `verify` |
+| `-api-keys` / `-api-keys-file` | — | client keys for allowlist mode |
+| `-auth-cache-ttl` | 5m | how long a verified key stays trusted |
+| `-ttl` | never | expire cached embeddings |
+| `-max-batch-items` | 2048 | reject oversized batches |
+| `-max-body-mb` | 64 | reject oversized bodies |
 | `-max-entries` / `-max-memory-mb` | 1M / 1024 | LRU bounds |
 | `-normalize` | off | `trim,collapse,lowercase` |
 | `-persist` | off | snapshot file; survives restarts |

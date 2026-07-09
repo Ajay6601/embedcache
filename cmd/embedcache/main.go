@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"embedcache/internal/analyze"
+	"embedcache/internal/auth"
 	"embedcache/internal/cache"
 	"embedcache/internal/fingerprint"
 	"embedcache/internal/pricing"
@@ -81,6 +83,14 @@ func runServe(args []string) error {
 	persistInterval := fs.Duration("persist-interval", 5*time.Minute, "how often to snapshot the cache when -persist is set")
 	pricingFile := fs.String("pricing", "", "JSON file of {\"model\": dollarsPerMillionTokens}; key \"default\" sets the fallback price")
 	requestLog := fs.String("request-log", "", "append every embedding request as JSONL (feed it to `embedcache analyze`)")
+	adminToken := fs.String("admin-token", "", "bearer token required for stats/report/metrics/flush endpoints")
+	authMode := fs.String("auth-mode", "off", "client key validation: off, allowlist, or verify (checks keys against the upstream)")
+	apiKeys := fs.String("api-keys", "", "comma-separated client keys for -auth-mode allowlist")
+	apiKeysFile := fs.String("api-keys-file", "", "file with one client key per line for -auth-mode allowlist")
+	authCacheTTL := fs.Duration("auth-cache-ttl", 5*time.Minute, "how long a verified key stays trusted in -auth-mode verify")
+	cacheTTL := fs.Duration("ttl", 0, "expire cached embeddings after this duration (0 = never; use when model weights change under the same name)")
+	maxBatch := fs.Int("max-batch-items", 2048, "reject batches with more items than this (0 = unlimited)")
+	maxBodyMB := fs.Int64("max-body-mb", 64, "reject request bodies larger than this")
 	fs.Parse(args)
 
 	if *upstreamURL == "" {
@@ -114,6 +124,32 @@ func runServe(args []string) error {
 
 	st := stats.New()
 	p := proxy.New(c, up, st, norm)
+	p.CacheTTL = *cacheTTL
+	p.MaxBatchItems = *maxBatch
+	p.MaxBody = *maxBodyMB << 20
+
+	if auth.Mode(*authMode) != auth.ModeOff {
+		keys := splitKeys(*apiKeys)
+		if *apiKeysFile != "" {
+			fileKeys, err := readKeysFile(*apiKeysFile)
+			if err != nil {
+				return err
+			}
+			keys = append(keys, fileKeys...)
+		}
+		authorizer, err := auth.New(auth.Mode(*authMode), keys, *upstreamURL, *authCacheTTL, nil)
+		if err != nil {
+			return err
+		}
+		p.Auth = authorizer
+	}
+	if *adminToken == "" {
+		log.Printf("warning: admin endpoints (stats/report/flush) are unauthenticated; set -admin-token for anything beyond a trusted network")
+	}
+	if auth.Mode(*authMode) == auth.ModeOff {
+		log.Printf("warning: cache hits are served without key validation (-auth-mode off); use allowlist or verify for untrusted callers")
+	}
+
 	if *requestLog != "" {
 		f, err := os.OpenFile(*requestLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
@@ -123,9 +159,11 @@ func runServe(args []string) error {
 		p.SetRequestLog(f)
 	}
 
+	websrv := server.New(p, st, table, up.Base)
+	websrv.AdminToken = *adminToken
 	srv := &http.Server{
 		Addr:    *listen,
-		Handler: server.New(p, st, table, up.Base).Handler(),
+		Handler: websrv.Handler(),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -167,6 +205,31 @@ func runServe(args []string) error {
 		log.Printf("saved %d cached embeddings to %s", c.Len(), *persist)
 	}
 	return nil
+}
+
+func splitKeys(csv string) []string {
+	var out []string
+	for _, k := range strings.Split(csv, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func readKeysFile(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading api keys file: %w", err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			out = append(out, line)
+		}
+	}
+	return out, nil
 }
 
 func runAnalyze(args []string) error {
