@@ -41,6 +41,44 @@ func TestSplitInputVariants(t *testing.T) {
 	}
 }
 
+func TestExtraParamsRoundtrip(t *testing.T) {
+	in := `{"model":"voyage-4","input":"x","input_type":"query","output_dimension":512}`
+	var req EmbeddingsRequest
+	if err := json.Unmarshal([]byte(in), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Model != "voyage-4" || string(req.Input) != `"x"` {
+		t.Fatalf("known fields lost: %+v", req)
+	}
+	if string(req.Extra["input_type"]) != `"query"` || string(req.Extra["output_dimension"]) != `512` {
+		t.Fatalf("extra fields lost: %v", req.Extra)
+	}
+	out, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(out, &m)
+	if string(m["input_type"]) != `"query"` || string(m["model"]) != `"voyage-4"` {
+		t.Fatalf("marshal dropped fields: %s", out)
+	}
+	// deterministic re-marshal (map keys sort)
+	out2, _ := json.Marshal(req)
+	if string(out) != string(out2) {
+		t.Fatal("marshal must be deterministic")
+	}
+}
+
+func TestNoExtraParamsMeansNilExtra(t *testing.T) {
+	var req EmbeddingsRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","input":"x"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Extra != nil {
+		t.Fatalf("baseline request must not allocate Extra: %v", req.Extra)
+	}
+}
+
 func TestMarshalInputsRoundtrip(t *testing.T) {
 	items, err := SplitInput(json.RawMessage(`["x","y"]`))
 	if err != nil {

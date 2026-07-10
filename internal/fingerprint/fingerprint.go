@@ -11,6 +11,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -68,16 +70,41 @@ func (n Normalizer) Apply(text string) string {
 	return text
 }
 
+// ParamsDigest canonicalizes provider-specific request parameters (Voyage's
+// input_type, output_dtype, ...) into a stable digest for the cache key. Two
+// requests with different extra params must never share an entry — providers
+// return different vectors for them. Empty input yields "".
+func ParamsDigest(extra map[string]json.RawMessage) string {
+	if len(extra) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(extra))
+	for k := range extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write(extra[k])
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Key computes the cache key for one input item. The version prefix guards
 // against silently mixing entries across incompatible key schemas.
-func Key(model string, dimensions int, encodingFormat string, item api.InputItem, norm Normalizer) string {
+func Key(model string, dimensions int, encodingFormat string, paramsDigest string, item api.InputItem, norm Normalizer) string {
 	h := sha256.New()
-	h.Write([]byte("ec1\x00"))
+	h.Write([]byte("ec2\x00"))
 	h.Write([]byte(model))
 	h.Write([]byte{0})
 	h.Write([]byte(strconv.Itoa(dimensions)))
 	h.Write([]byte{0})
 	h.Write([]byte(encodingFormat))
+	h.Write([]byte{0})
+	h.Write([]byte(paramsDigest))
 	h.Write([]byte{0})
 	if item.IsTokens {
 		h.Write([]byte("t\x00"))

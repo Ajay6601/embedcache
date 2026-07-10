@@ -99,8 +99,9 @@ func Run(r io.Reader, opts Options) (*Result, error) {
 			agg = &ModelAgg{}
 			res.PerModel[req.Model] = agg
 		}
+		paramsDigest := fingerprint.ParamsDigest(req.Extra)
 		for _, item := range items {
-			key := fingerprint.Key(req.Model, req.Dimensions, req.EncodingFormat, item, opts.Norm)
+			key := fingerprint.Key(req.Model, req.Dimensions, req.EncodingFormat, paramsDigest, item, opts.Norm)
 			tok := tokens.Estimate(item)
 			res.Items++
 			agg.Items++
