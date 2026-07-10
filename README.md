@@ -26,6 +26,7 @@ embedcache does one thing, language-agnostically, and provably correctly. Three 
 - [EXPERIMENTS.md](EXPERIMENTS.md) — controlled validation against a deterministic mock (re-run by CI on every push)
 - [PRODSIM.md](PRODSIM.md) — production-scale simulation: 50k-chunk corpus, 300k-request storm at 39k req/s, hostile-traffic mix, crash recovery, all security features on
 - [REALTEST.md](REALTEST.md) — a **real workload with zero constructed duplicates**: a working RAG agent over 103 live Wikipedia articles, real LLM answers, and a live-refresh pass. Measured organically: **49.7% of the workload's embedding tokens were duplicate work** — 21.7% of the agent's query traffic repeated, and the refresh pass re-embedded a corpus where nothing had changed and was 100% absorbed.
+- [CHUNKDIFF.md](CHUNKDIFF.md) — the chunk-diff engine on one real, live Wikipedia article with one realistic single-sentence edit: content-defined chunking absorbed **93.8%** of the re-ingest from cache; fixed-size chunking (what most pipelines do today) absorbed only **28.6%** on the identical edit.
 
 | Claim | Evidence |
 |---|---|
@@ -33,7 +34,7 @@ embedcache does one thing, language-agnostically, and provably correctly. Three 
 | Coalescing | 200 concurrent identical requests → 1 upstream computation; 800 overlapping batch items → 20 (the ideal) |
 | Negligible overhead | ~0.0 ms added p50 on a hit; 65,891 cache-hit req/s on loopback (32 clients) |
 | Incremental re-ingest savings | 10,000-chunk corpus, 5% of docs edited, full re-ingest: **95.2% of embedding calls absorbed** |
-| Honest limits | Changing chunking config re-embeds everything (0% saved) — exact-match can't fix that; a chunk-diff engine (roadmap) can |
+| Chunk-diff engine | Content-defined chunking survives edits: 93.8% cache hit rate re-ingesting a real Wikipedia article after one real edit, vs 28.6% for fixed-size chunking |
 | Waste report accuracy | Offline analyzer found exactly the 17,948 duplicates the live cache absorbed on the same 20k-query workload |
 
 ## Quickstart
@@ -157,11 +158,21 @@ Embedding calls are idempotent, so transient upstream failures (network errors, 
 
 Admin: `POST /_ec/flush` empties the cache (use when a model's weights change under the same name).
 
+## Chunk-diff engine
+
+Fixed-size chunking re-slices a document from the edit point onward, so every downstream chunk becomes new text and misses the cache on re-ingestion — the honest limitation documented in [EXPERIMENTS.md](EXPERIMENTS.md) (E4 pass 3, 0% absorbed). `embedcache chunk` splits text at content-defined boundaries (FastCDC) instead of fixed byte offsets, so an edit only perturbs the chunks touching it — everything else re-chunks to byte-identical text and hits the existing cache normally.
+
+```bash
+embedcache chunk document.md > chunks.jsonl        # one JSON line per chunk: {hash, size, text}
+cat chunks.jsonl | jq -r .text | ...                # feed straight into batched embedding calls
+```
+
+Proven on one real, live Wikipedia article with one realistic single-sentence edit — [CHUNKDIFF.md](CHUNKDIFF.md): **93.8%** cache hit rate on re-ingest vs **28.6%** for fixed-size chunking, through the real proxy and real Ollama inference.
+
 ## Roadmap
 
-1. **Chunk-diff engine** — deterministic chunk fingerprints that survive re-chunking, so pipeline config changes stop meaning full re-embeds (the one scenario E4 shows exact-match can't absorb).
-2. **Cost enforcement** — per-key/per-tenant token budgets with hard limits, agent-loop guards.
-3. **TTLs & invalidation rules** per model/route.
+1. **Cost enforcement** — per-key/per-tenant token budgets with hard limits, agent-loop guards.
+2. **TTLs & invalidation rules** per model/route.
 
 ## Development
 

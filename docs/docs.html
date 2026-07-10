@@ -31,6 +31,7 @@
     <a href="#how">How it works</a>
     <a href="#flags">All serve flags</a>
     <a href="#analyzer">Waste analyzer</a>
+    <a href="#chunker">Chunk-diff engine</a>
     <a href="#admin">Admin API</a>
     <a href="#metrics">Metrics</a>
     <h4>Production</h4>
@@ -168,6 +169,24 @@ cat logs/*.jsonl | embedcache analyze</pre>
     <p>To produce logs the analyzer can read, run the proxy with <code>-request-log</code>,
     or dump requests from your own gateway/app — the format is forgiving.</p>
 
+    <h2 id="chunker">Chunk-diff engine</h2>
+    <p>Exact-match caching only helps if re-ingesting a document produces the <em>same chunk
+    text</em> as before. Fixed-size chunking (slicing by byte offset) breaks that: any edit
+    shifts every chunk boundary after it, so a small edit re-embeds the whole rest of the
+    document. <code>embedcache chunk</code> splits text at content-defined boundaries instead —
+    an edit only changes the one or two chunks touching it.</p>
+    <pre class="code">embedcache chunk document.md > chunks.jsonl
+<span class="cm"># one JSON line per chunk: {"hash": "...", "size": 743, "text": "..."}</span>
+cat chunks.jsonl | jq -r .text | while read -r c; do
+  <span class="cm"># feed each chunk into your batched /v1/embeddings calls</span>
+done</pre>
+    <p>Flags: <code>-min</code>/<code>-avg</code>/<code>-max</code> bound chunk size in bytes
+    (defaults 200/800/2000, tuned for paragraph-scale text). Reads a file argument or stdin.</p>
+    <p>Measured on one real, live Wikipedia article with one realistic single-sentence edit —
+    <a href="https://github.com/Ajay6601/embedcache/blob/main/CHUNKDIFF.md">CHUNKDIFF.md</a>:
+    content-defined chunking absorbed <b>93.8%</b> of the re-ingest from cache; fixed-size
+    chunking absorbed <b>28.6%</b> on the identical edit.</p>
+
     <h2 id="admin">Admin API</h2>
     <table>
       <tr><th>Endpoint</th><th>What it does</th></tr>
@@ -260,10 +279,13 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
 
     <h2 id="limitations">Limitations (read this)</h2>
     <ul>
-      <li><b>Exact-match cannot absorb a re-chunk.</b> If you change your chunking
-      configuration, every chunk's text changes and everything re-embeds. Measured and
-      documented in <a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">E4</a>;
-      a chunk-diff engine is the roadmap answer.</li>
+      <li><b>Fixed-size chunking defeats exact-match caching.</b> Slicing a document by byte
+      offset means any edit shifts every downstream chunk, so a naive re-chunk re-embeds
+      everything — measured at 0% absorbed in
+      <a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">E4</a>. Use
+      <code>embedcache chunk</code> (content-defined chunking) instead: edits only perturb the
+      chunks they touch — <b>93.8%</b> absorbed on a real edit to a real article, see
+      <a href="https://github.com/Ajay6601/embedcache/blob/main/CHUNKDIFF.md">CHUNKDIFF.md</a>.</li>
       <li><b>Semantically similar ≠ identical.</b> "reset my password" and "how to reset
       password" are different entries. Opt-in normalization (<code>trim,collapse,lowercase</code>)
       widens matching slightly; semantic caching is deliberately not offered (see FAQ).</li>
