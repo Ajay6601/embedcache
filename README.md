@@ -122,6 +122,10 @@ embedcache serve -upstream http://localhost:8000 \
 - **`-auth-mode`** — cache hits never touch the upstream, so without this a revoked or missing key can still read cached vectors. `allowlist` is for self-hosted backends (the proxy owns the key list); `verify` is for hosted providers — the caller's key is checked against the upstream (`GET /v1/models`) and the verdict cached for `-auth-cache-ttl` (default 5m, negative verdicts 1m, fail-closed on upstream outage).
 - Terminate TLS in front (Caddy, nginx, or your ingress); embedcache listens in plaintext.
 
+## Resilience
+
+Embedding calls are idempotent, so transient upstream failures (network errors, 5xx, 429) are retried with exponential backoff — `-upstream-retries`, honoring `Retry-After`. Sustained failures trip a circuit breaker (`-breaker-threshold` consecutive failures) and requests fail fast with 503 instead of stacking timeouts on a dead backend; after `-breaker-cooldown` a single probe decides whether to close it. Cache hits keep serving while the circuit is open — an upstream outage degrades misses, not the whole service. The request log rotates at `-request-log-max-mb` so it cannot fill the disk. Breaker state, retries, and fast-fails are exported at `/metrics`.
+
 ## Serve flags
 
 | flag | default | |
@@ -137,9 +141,12 @@ embedcache serve -upstream http://localhost:8000 \
 | `-max-batch-items` | 2048 | reject oversized batches |
 | `-max-body-mb` | 64 | reject oversized bodies |
 | `-max-entries` / `-max-memory-mb` | 1M / 1024 | LRU bounds |
+| `-upstream-retries` | 2 | retries for transient upstream failures |
+| `-breaker-threshold` / `-breaker-cooldown` | 5 / 10s | circuit breaker |
 | `-normalize` | off | `trim,collapse,lowercase` |
 | `-persist` | off | snapshot file; survives restarts |
 | `-request-log` | off | JSONL log, feeds `analyze` |
+| `-request-log-max-mb` | 512 | rotate the request log at this size |
 | `-pricing` | built-in | JSON `{"model": $/1M, "default": ...}` |
 
 Admin: `POST /_ec/flush` empties the cache (use when a model's weights change under the same name).
