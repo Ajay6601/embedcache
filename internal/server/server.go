@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 
+	"embedcache/internal/breaker"
 	"embedcache/internal/pricing"
 	"embedcache/internal/proxy"
 	"embedcache/internal/stats"
@@ -100,7 +101,11 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) snapshot() stats.Report {
-	return s.Stats.Snapshot(s.Pricing, s.Proxy.Cache.Len(), s.Proxy.Cache.Bytes())
+	r := s.Stats.Snapshot(s.Pricing, s.Proxy.Cache.Len(), s.Proxy.Cache.Bytes())
+	if s.Proxy.Upstream != nil {
+		r.BreakerOpen = s.Proxy.Upstream.Breaker.State() == breaker.Open
+	}
+	return r
 }
 
 func (s *Server) serveStats(w http.ResponseWriter) {

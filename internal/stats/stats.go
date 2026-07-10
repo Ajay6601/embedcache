@@ -38,6 +38,9 @@ type Collector struct {
 	UpstreamCalls uint64
 	UpstreamItems uint64
 
+	Retries   uint64 // upstream attempts beyond the first
+	FastFails uint64 // requests rejected because the circuit was open
+
 	SavedTokens uint64
 	SpentTokens uint64
 
@@ -120,6 +123,18 @@ func (c *Collector) RecordError() {
 	c.mu.Unlock()
 }
 
+func (c *Collector) RecordRetry() {
+	c.mu.Lock()
+	c.Retries++
+	c.mu.Unlock()
+}
+
+func (c *Collector) RecordFastFail() {
+	c.mu.Lock()
+	c.FastFails++
+	c.mu.Unlock()
+}
+
 type Report struct {
 	UptimeSeconds float64            `json:"uptime_seconds"`
 	Requests      uint64             `json:"requests"`
@@ -132,6 +147,9 @@ type Report struct {
 	HitRate       float64            `json:"hit_rate"`
 	UpstreamCalls uint64             `json:"upstream_calls"`
 	UpstreamItems uint64             `json:"upstream_items"`
+	Retries       uint64             `json:"upstream_retries"`
+	FastFails     uint64             `json:"breaker_fast_fails"`
+	BreakerOpen   bool               `json:"breaker_open"`
 	SavedTokens   uint64             `json:"saved_tokens"`
 	SpentTokens   uint64             `json:"spent_tokens"`
 	SavedUSD      float64            `json:"saved_usd"`
@@ -156,6 +174,8 @@ func (c *Collector) Snapshot(table *pricing.Table, cacheEntries int, cacheBytes 
 		Coalesced:     c.Coalesced,
 		UpstreamCalls: c.UpstreamCalls,
 		UpstreamItems: c.UpstreamItems,
+		Retries:       c.Retries,
+		FastFails:     c.FastFails,
 		SavedTokens:   c.SavedTokens,
 		SpentTokens:   c.SpentTokens,
 		CacheEntries:  cacheEntries,
@@ -187,7 +207,14 @@ func (r Report) RenderText(w io.Writer) {
 	fmt.Fprintf(w, "embedding items        %d\n", r.Items)
 	fmt.Fprintf(w, "  served from cache    %d\n", r.Hits)
 	fmt.Fprintf(w, "  coalesced in flight  %d\n", r.Coalesced)
-	fmt.Fprintf(w, "  sent upstream        %d  (in %d calls)\n", r.Misses, r.UpstreamCalls)
+	fmt.Fprintf(w, "  sent upstream        %d  (in %d calls, %d retries)\n", r.Misses, r.UpstreamCalls, r.Retries)
+	if r.FastFails > 0 || r.BreakerOpen {
+		state := "closed"
+		if r.BreakerOpen {
+			state = "OPEN"
+		}
+		fmt.Fprintf(w, "circuit breaker        %s   (%d requests failed fast)\n", state, r.FastFails)
+	}
 	fmt.Fprintf(w, "hit rate               %.1f%%\n", r.HitRate*100)
 	fmt.Fprintf(w, "tokens paid upstream   %d   ($%.4f)\n", r.SpentTokens, r.SpentUSD)
 	fmt.Fprintf(w, "tokens saved           %d   ($%.4f)\n", r.SavedTokens, r.SavedUSD)
@@ -220,6 +247,13 @@ func (r Report) RenderPrometheus(w io.Writer) {
 	fmt.Fprintf(w, "embedcache_items_total{result=\"miss\"} %d\n", r.Misses)
 	fmt.Fprintf(w, "embedcache_items_total{result=\"coalesced\"} %d\n", r.Coalesced)
 	fmt.Fprintf(w, "# TYPE embedcache_upstream_calls_total counter\nembedcache_upstream_calls_total %d\n", r.UpstreamCalls)
+	fmt.Fprintf(w, "# TYPE embedcache_upstream_retries_total counter\nembedcache_upstream_retries_total %d\n", r.Retries)
+	fmt.Fprintf(w, "# TYPE embedcache_breaker_fast_fails_total counter\nembedcache_breaker_fast_fails_total %d\n", r.FastFails)
+	open := 0
+	if r.BreakerOpen {
+		open = 1
+	}
+	fmt.Fprintf(w, "# TYPE embedcache_breaker_open gauge\nembedcache_breaker_open %d\n", open)
 	fmt.Fprintf(w, "# TYPE embedcache_upstream_items_total counter\nembedcache_upstream_items_total %d\n", r.UpstreamItems)
 	fmt.Fprintf(w, "# TYPE embedcache_saved_tokens_total counter\nembedcache_saved_tokens_total %d\n", r.SavedTokens)
 	fmt.Fprintf(w, "# TYPE embedcache_spent_tokens_total counter\nembedcache_spent_tokens_total %d\n", r.SpentTokens)
