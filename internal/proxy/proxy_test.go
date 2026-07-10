@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,9 +16,11 @@ import (
 
 	"embedcache/internal/api"
 	"embedcache/internal/auth"
+	"embedcache/internal/breaker"
 	"embedcache/internal/cache"
 	"embedcache/internal/fingerprint"
 	"embedcache/internal/mockllm"
+	"embedcache/internal/pricing"
 	"embedcache/internal/stats"
 	"embedcache/internal/upstream"
 )
@@ -366,6 +370,71 @@ func TestCacheTTLEndToEnd(t *testing.T) {
 	_, r3 := embed(t, srv.URL, map[string]any{"model": "m1", "input": "ttl probe"})
 	if r3.Header.Get("X-Embedcache-Status") != "miss" {
 		t.Fatalf("after TTL must miss, got %q", r3.Header.Get("X-Embedcache-Status"))
+	}
+}
+
+func TestCircuitOpenReturns503(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+	}))
+	defer dead.Close()
+	up, _ := upstream.New(dead.URL, "", 0)
+	up.Retries = 0
+	up.Breaker = breaker.New(1, time.Hour)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	post := func(input string) int {
+		b, _ := json.Marshal(map[string]any{"model": "m1", "input": input})
+		resp, err := http.Post(srv.URL+"/v1/embeddings", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post("first"); code != 503 {
+		t.Fatalf("upstream 503 should pass through, got %d", code)
+	}
+	// breaker is now open: the next request must fail fast with 503 without
+	// waiting on the dead upstream
+	if code := post("second"); code != 503 {
+		t.Fatalf("open circuit should 503, got %d", code)
+	}
+	if p.Stats.Snapshot(nil2(), 0, 0).FastFails != 1 {
+		t.Fatal("fast fail not recorded")
+	}
+}
+
+func nil2() *pricing.Table { return pricing.Default() }
+
+func TestRequestLogRotation(t *testing.T) {
+	s := newStack(t)
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "req.jsonl")
+	if err := p.OpenRequestLog(logPath, 400); err != nil { // tiny budget
+		t.Fatal(err)
+	}
+	defer p.CloseRequestLog()
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	for i := 0; i < 20; i++ {
+		embed(t, srv.URL, map[string]any{"model": "m1", "input": fmt.Sprintf("rotation filler line %02d", i)})
+	}
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() > 400 {
+		t.Fatalf("live log exceeded budget: %d bytes", fi.Size())
+	}
+	if _, err := os.Stat(logPath + ".1"); err != nil {
+		t.Fatal("rotated backup missing")
 	}
 }
 

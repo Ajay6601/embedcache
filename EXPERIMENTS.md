@@ -1,6 +1,6 @@
 # embedcache experiments
 
-Generated 2026-07-09 19:31 EDT · windows/amd64 · 16 CPUs · Go go1.26.5 · mock upstream on loopback
+Generated 2026-07-10 07:27 EDT · windows/amd64 · 16 CPUs · Go go1.26.5 · mock upstream on loopback
 
 Every experiment runs the real `embedcache serve` binary as a subprocess against
 a deterministic mock OpenAI-compatible backend: the embedding for an input is a pure
@@ -64,17 +64,17 @@ machine (Windows loopback stack) — treat them as upper bounds, not benchmarks.
 
 | path (1500 sequential reqs) | p50 ms | p95 ms | p99 ms |
 |---|---|---|---|
-| direct to mock upstream | 0.00 | 0.57 | 5.24 |
-| proxy, cache hit | 0.00 | 0.57 | 0.72 |
-| proxy, cache miss (adds one upstream hop) | 0.54 | 0.74 | 1.12 |
+| direct to mock upstream | 0.00 | 0.56 | 4.03 |
+| proxy, cache hit | 0.00 | 0.56 | 0.73 |
+| proxy, cache miss (adds one upstream hop) | 0.54 | 0.67 | 0.97 |
 
 Added p50 latency: **0.00 ms on a hit**, **0.54 ms on a miss** (miss includes a second
 loopback round-trip to the upstream, which a real deployment pays anyway).
 
-Sustained cache-hit throughput, 32 concurrent clients, 5s: **62452 req/s**.
+Sustained cache-hit throughput, 32 concurrent clients, 5s: **58381 req/s**.
 
 - **PASS** — hit overhead under 5ms p50: hit adds 0.00 ms at p50
-- **PASS** — throughput sane: 62452 cache-hit req/s on loopback
+- **PASS** — throughput sane: 58381 cache-hit req/s on loopback
 
 ## E4 — RAG re-ingestion: where dedupe saves money (and where it honestly doesn't)
 

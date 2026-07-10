@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -49,8 +50,11 @@ type Proxy struct {
 	// MaxBody rejects oversized request bodies.
 	MaxBody int64
 
-	logMu      sync.Mutex
-	requestLog *os.File
+	logMu   sync.Mutex
+	logFile *os.File
+	logPath string
+	logSize int64
+	logMax  int64
 }
 
 func New(c *cache.Cache, up *upstream.Client, st *stats.Collector, norm fingerprint.Normalizer) *Proxy {
@@ -64,9 +68,51 @@ func New(c *cache.Cache, up *upstream.Client, st *stats.Collector, norm fingerpr
 	}
 }
 
-// SetRequestLog enables JSONL request logging compatible with the offline
-// analyzer (`embedcache analyze`).
-func (p *Proxy) SetRequestLog(f *os.File) { p.requestLog = f }
+// OpenRequestLog enables JSONL request logging compatible with the offline
+// analyzer (`embedcache analyze`). When the log reaches maxBytes it is
+// rotated to path+".1" (one generation kept), so it cannot fill the disk.
+func (p *Proxy) OpenRequestLog(path string, maxBytes int64) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
+	p.logFile, p.logPath, p.logSize, p.logMax = f, path, fi.Size(), maxBytes
+	return nil
+}
+
+func (p *Proxy) CloseRequestLog() {
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
+	if p.logFile != nil {
+		p.logFile.Close()
+		p.logFile = nil
+	}
+}
+
+// rotateLogLocked is called with logMu held when the size budget is spent.
+func (p *Proxy) rotateLogLocked() {
+	p.logFile.Close()
+	old := p.logPath + ".1"
+	os.Remove(old)
+	if err := os.Rename(p.logPath, old); err != nil {
+		log.Printf("request log rotation failed: %v", err)
+	}
+	f, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("request log reopen failed, logging disabled: %v", err)
+		p.logFile = nil
+		return
+	}
+	p.logFile = f
+	p.logSize = 0
+}
 
 func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if p.Auth != nil {
@@ -174,6 +220,9 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 					delete(pending, k)
 				}
 				p.Stats.RecordError()
+				if errors.Is(err, upstream.ErrCircuitOpen) {
+					p.Stats.RecordFastFail()
+				}
 				writeUpstreamError(w, err)
 				return
 			}
@@ -276,16 +325,24 @@ func callerHash(auth string) string {
 }
 
 func (p *Proxy) logRequest(req *api.EmbeddingsRequest) {
-	if p.requestLog == nil {
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
+	if p.logFile == nil {
 		return
 	}
 	line, err := json.Marshal(req)
 	if err != nil {
 		return
 	}
-	p.logMu.Lock()
-	p.requestLog.Write(append(line, '\n'))
-	p.logMu.Unlock()
+	line = append(line, '\n')
+	if p.logMax > 0 && p.logSize+int64(len(line)) > p.logMax {
+		p.rotateLogLocked()
+		if p.logFile == nil {
+			return
+		}
+	}
+	n, _ := p.logFile.Write(line)
+	p.logSize += int64(n)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
@@ -295,6 +352,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeUpstreamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, upstream.ErrCircuitOpen) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	var he *upstream.HTTPError
 	if errors.As(err, &he) {
 		ct := he.ContentType

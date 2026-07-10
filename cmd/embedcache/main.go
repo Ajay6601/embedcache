@@ -18,6 +18,7 @@ import (
 
 	"embedcache/internal/analyze"
 	"embedcache/internal/auth"
+	"embedcache/internal/breaker"
 	"embedcache/internal/cache"
 	"embedcache/internal/fingerprint"
 	"embedcache/internal/pricing"
@@ -91,6 +92,10 @@ func runServe(args []string) error {
 	cacheTTL := fs.Duration("ttl", 0, "expire cached embeddings after this duration (0 = never; use when model weights change under the same name)")
 	maxBatch := fs.Int("max-batch-items", 2048, "reject batches with more items than this (0 = unlimited)")
 	maxBodyMB := fs.Int64("max-body-mb", 64, "reject request bodies larger than this")
+	retries := fs.Int("upstream-retries", 2, "extra attempts for transient upstream failures (network errors, 5xx, 429)")
+	breakerThreshold := fs.Int("breaker-threshold", 5, "consecutive upstream failures before the circuit opens (0 = disabled)")
+	breakerCooldown := fs.Duration("breaker-cooldown", 10*time.Second, "how long the circuit stays open before probing the upstream")
+	requestLogMaxMB := fs.Int64("request-log-max-mb", 512, "rotate the request log when it reaches this size (one .1 backup kept)")
 	fs.Parse(args)
 
 	if *upstreamURL == "" {
@@ -104,6 +109,8 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	up.Retries = *retries
+	up.Breaker = breaker.New(*breakerThreshold, *breakerCooldown)
 	table := pricing.Default()
 	if *pricingFile != "" {
 		if err := table.LoadFile(*pricingFile); err != nil {
@@ -150,13 +157,13 @@ func runServe(args []string) error {
 		log.Printf("warning: cache hits are served without key validation (-auth-mode off); use allowlist or verify for untrusted callers")
 	}
 
+	up.OnRetry = st.RecordRetry
+
 	if *requestLog != "" {
-		f, err := os.OpenFile(*requestLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
+		if err := p.OpenRequestLog(*requestLog, *requestLogMaxMB<<20); err != nil {
 			return fmt.Errorf("opening request log: %w", err)
 		}
-		defer f.Close()
-		p.SetRequestLog(f)
+		defer p.CloseRequestLog()
 	}
 
 	websrv := server.New(p, st, table, up.Base)
