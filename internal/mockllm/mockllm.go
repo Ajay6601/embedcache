@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/tokens"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/tokens"
 )
 
 type Server struct {

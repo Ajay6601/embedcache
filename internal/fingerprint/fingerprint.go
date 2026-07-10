@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/api"
 )
 
 // Normalizer controls opt-in text canonicalization before hashing. Each rule

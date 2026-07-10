@@ -3,7 +3,7 @@ package tokens
 import (
 	"testing"
 
-	"embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/api"
 )
 
 func TestEstimate(t *testing.T) {

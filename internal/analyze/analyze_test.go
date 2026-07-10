@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"embedcache/internal/fingerprint"
-	"embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/pricing"
 )
 
 func TestDuplicateCounting(t *testing.T) {

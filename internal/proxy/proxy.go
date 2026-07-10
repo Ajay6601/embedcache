@@ -22,14 +22,14 @@ import (
 	"sync"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/auth"
-	"embedcache/internal/cache"
-	"embedcache/internal/coalesce"
-	"embedcache/internal/fingerprint"
-	"embedcache/internal/stats"
-	"embedcache/internal/tokens"
-	"embedcache/internal/upstream"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/auth"
+	"github.com/Ajay6601/embedcache/internal/cache"
+	"github.com/Ajay6601/embedcache/internal/coalesce"
+	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/stats"
+	"github.com/Ajay6601/embedcache/internal/tokens"
+	"github.com/Ajay6601/embedcache/internal/upstream"
 )
 
 var errLeaderAborted = errors.New("the request computing this embedding was aborted")

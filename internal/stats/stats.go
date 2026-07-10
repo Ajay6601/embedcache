@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/pricing"
 )
 
 type Bucket struct {

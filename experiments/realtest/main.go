@@ -33,7 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/api"
 )
 
 var (

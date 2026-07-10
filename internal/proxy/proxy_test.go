@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/auth"
-	"embedcache/internal/breaker"
-	"embedcache/internal/cache"
-	"embedcache/internal/fingerprint"
-	"embedcache/internal/mockllm"
-	"embedcache/internal/pricing"
-	"embedcache/internal/stats"
-	"embedcache/internal/upstream"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/auth"
+	"github.com/Ajay6601/embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/cache"
+	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/mockllm"
+	"github.com/Ajay6601/embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/stats"
+	"github.com/Ajay6601/embedcache/internal/upstream"
 )
 
 type stack struct {

@@ -11,10 +11,10 @@ import (
 	"sort"
 	"strings"
 
-	"embedcache/internal/api"
-	"embedcache/internal/fingerprint"
-	"embedcache/internal/pricing"
-	"embedcache/internal/tokens"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/tokens"
 )
 
 type Options struct {

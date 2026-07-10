@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/breaker"
 )
 
 // HTTPError carries a non-2xx upstream response so the proxy can forward it

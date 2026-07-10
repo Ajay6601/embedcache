@@ -3,7 +3,7 @@ package fingerprint
 import (
 	"testing"
 
-	"embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/api"
 )
 
 func text(s string) api.InputItem { return api.InputItem{Text: s} }

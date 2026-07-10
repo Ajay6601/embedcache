@@ -13,10 +13,10 @@ import (
 	"net/url"
 	"strings"
 
-	"embedcache/internal/breaker"
-	"embedcache/internal/pricing"
-	"embedcache/internal/proxy"
-	"embedcache/internal/stats"
+	"github.com/Ajay6601/embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/proxy"
+	"github.com/Ajay6601/embedcache/internal/stats"
 )
 
 type Server struct {

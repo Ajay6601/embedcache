@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"embedcache/internal/cache"
-	"embedcache/internal/fingerprint"
-	"embedcache/internal/pricing"
-	"embedcache/internal/proxy"
-	"embedcache/internal/stats"
-	"embedcache/internal/upstream"
+	"github.com/Ajay6601/embedcache/internal/cache"
+	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/proxy"
+	"github.com/Ajay6601/embedcache/internal/stats"
+	"github.com/Ajay6601/embedcache/internal/upstream"
 )
 
 func newTestServer(t *testing.T, adminToken string) *httptest.Server {

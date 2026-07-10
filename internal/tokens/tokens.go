@@ -8,7 +8,7 @@ package tokens
 import (
 	"sort"
 
-	"embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/api"
 )
 
 func Estimate(item api.InputItem) int {

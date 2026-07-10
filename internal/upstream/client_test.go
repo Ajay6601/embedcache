@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/breaker"
 )
 
 func okBody(n int) []byte {

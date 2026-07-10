@@ -24,8 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"embedcache/internal/api"
-	"embedcache/internal/mockllm"
+	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/mockllm"
 )
 
 var (
