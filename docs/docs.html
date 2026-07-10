@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation — embedcache</title>
+<meta name="description" content="embedcache documentation: installation, configuration, security, resilience, metrics, and the waste analyzer.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="top">
+  <a class="brand" href="index.html">embed<span>cache</span></a>
+  <div class="links">
+    <a href="docs.html" class="active">Docs</a>
+    <a href="examples.html">Examples</a>
+    <a href="https://github.com/Ajay6601/embedcache/blob/main/REALTEST.md">Evidence</a>
+    <a class="gh" href="https://github.com/Ajay6601/embedcache">GitHub &rarr;</a>
+  </div>
+</nav>
+
+<div class="wrap docs-layout">
+
+  <aside class="docs-side">
+    <h4>Getting started</h4>
+    <a href="#install">Install</a>
+    <a href="#quickstart">Quickstart</a>
+    <a href="#headers">Response headers</a>
+    <h4>Reference</h4>
+    <a href="#how">How it works</a>
+    <a href="#flags">All serve flags</a>
+    <a href="#analyzer">Waste analyzer</a>
+    <a href="#admin">Admin API</a>
+    <a href="#metrics">Metrics</a>
+    <h4>Production</h4>
+    <a href="#security">Security</a>
+    <a href="#resilience">Resilience</a>
+    <a href="#persistence">Persistence &amp; TTL</a>
+    <h4>Honesty</h4>
+    <a href="#guarantees">Guarantees</a>
+    <a href="#limitations">Limitations</a>
+    <a href="#faq">FAQ</a>
+  </aside>
+
+  <main class="docs-main">
+    <h1>Documentation</h1>
+    <p>embedcache is a caching, deduplicating, cost-accounting proxy for OpenAI-compatible
+    embedding APIs. One static binary, pure Go stdlib, three subcommands:
+    <code>serve</code> (the proxy), <code>analyze</code> (offline waste report),
+    <code>report</code> (live waste report).</p>
+
+    <h2 id="install">Install</h2>
+    <h3>From source (Go 1.22+)</h3>
+    <pre class="code">go install github.com/Ajay6601/embedcache/cmd/embedcache@latest</pre>
+    <h3>Clone and build</h3>
+    <pre class="code">git clone https://github.com/Ajay6601/embedcache
+cd embedcache
+go build -o embedcache ./cmd/embedcache</pre>
+    <h3>Docker</h3>
+    <pre class="code">docker build -t embedcache https://github.com/Ajay6601/embedcache.git
+docker run -p 8090:8090 embedcache serve -listen :8090 -upstream http://host.docker.internal:11434</pre>
+    <p>The binary has zero runtime dependencies — copy it anywhere and run it.</p>
+
+    <h2 id="quickstart">Quickstart</h2>
+    <p>Start the proxy in front of your embedding backend:</p>
+    <pre class="code"><span class="cm"># self-hosted engines</span>
+embedcache serve -upstream http://localhost:11434                <span class="cm"># Ollama</span>
+embedcache serve -upstream http://localhost:8000                 <span class="cm"># vLLM / TEI</span>
+
+<span class="cm"># hosted providers</span>
+embedcache serve -upstream https://api.openai.com                <span class="cm"># OpenAI</span>
+embedcache serve -upstream https://generativelanguage.googleapis.com/v1beta/openai \
+                 -upstream-api-key $GEMINI_API_KEY               <span class="cm"># Gemini</span></pre>
+    <p>Then point your client's <code>base_url</code> at the proxy instead of the provider.
+    Your <code>Authorization</code> header is forwarded upstream (or pinned with
+    <code>-upstream-api-key</code>). Any request path ending in <code>/embeddings</code> is
+    cached; everything else passes through untouched, so embedcache can front a full
+    OpenAI-compatible server.</p>
+    <pre class="code"><span class="cm"># Python</span>
+client = OpenAI(base_url=<span class="st">"http://localhost:8090/v1"</span>, api_key=<span class="st">"sk-..."</span>)
+client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>, input=[<span class="st">"hello"</span>, <span class="st">"world"</span>])</pre>
+    <p>See <a href="examples.html">Examples</a> for JavaScript, Go, LangChain, LlamaIndex,
+    Docker Compose, and Kubernetes recipes.</p>
+
+    <h2 id="headers">Response headers</h2>
+    <p>Every embeddings response tells you exactly what happened:</p>
+    <table>
+      <tr><th>Header</th><th>Meaning</th></tr>
+      <tr><td><code>X-Embedcache-Status</code></td><td><code>hit</code> (fully served from cache), <code>miss</code> (fully computed upstream), or <code>partial</code> (mixed batch)</td></tr>
+      <tr><td><code>X-Embedcache-Hits</code></td><td>items served from cache</td></tr>
+      <tr><td><code>X-Embedcache-Misses</code></td><td>items computed upstream by this request</td></tr>
+      <tr><td><code>X-Embedcache-Coalesced</code></td><td>items served by waiting on another in-flight request's computation</td></tr>
+      <tr><td><code>X-Embedcache-Saved-Tokens</code></td><td>tokens this request did not pay for</td></tr>
+    </table>
+    <div class="note">
+      <b>Billing semantics:</b> <code>usage.prompt_tokens</code> in the response reflects only
+      what <em>this request</em> was actually billed upstream. Cache hits and coalesced items
+      cost zero. Your existing usage accounting keeps working — it just gets smaller.
+    </div>
+
+    <h2 id="how">How it works</h2>
+    <ol>
+      <li><b>Fingerprint.</b> Each input item is hashed with its full identity:
+      <code>SHA-256(model, dimensions, encoding_format, content)</code>. Two items share a
+      cache entry only when the upstream response is guaranteed interchangeable. Token-array
+      inputs are supported and never collide with text.</li>
+      <li><b>Split the batch.</b> Cached items are answered from memory as byte-exact replays
+      of the upstream's original JSON. Items currently being computed by <em>any other
+      request</em> are coalesced — the request waits for that result instead of recomputing.
+      Duplicates within one batch are computed once.</li>
+      <li><b>Forward the remainder.</b> Only never-seen items go upstream, as one batch.
+      Results are cached, distributed to all waiters, and reassembled at their original
+      indices.</li>
+    </ol>
+    <div class="note">
+      Byte-exact means byte-exact: the cached value is the raw JSON of the upstream's
+      <code>embedding</code> field, replayed verbatim. No float parsing, no re-encoding,
+      no precision drift. <code>encoding_format=base64</code> and <code>float</code> are
+      cached as separate entries for the same reason.
+    </div>
+
+    <h2 id="flags">All serve flags</h2>
+    <table>
+      <tr><th>Flag</th><th>Default</th><th>What it does</th></tr>
+      <tr><td><code>-listen</code></td><td><code>:8090</code></td><td>bind address</td></tr>
+      <tr><td><code>-upstream</code></td><td>required</td><td>base URL of the OpenAI-compatible backend</td></tr>
+      <tr><td><code>-upstream-api-key</code></td><td>forward client's</td><td>pin one upstream key for all traffic</td></tr>
+      <tr><td><code>-upstream-timeout</code></td><td><code>120s</code></td><td>per-call upstream timeout</td></tr>
+      <tr><td><code>-upstream-retries</code></td><td><code>2</code></td><td>extra attempts for transient failures (network, 5xx, 429); honors <code>Retry-After</code></td></tr>
+      <tr><td><code>-breaker-threshold</code></td><td><code>5</code></td><td>consecutive failures before the circuit opens (0 disables)</td></tr>
+      <tr><td><code>-breaker-cooldown</code></td><td><code>10s</code></td><td>open duration before a single probe is admitted</td></tr>
+      <tr><td><code>-max-entries</code></td><td><code>1000000</code></td><td>LRU bound on cached embeddings (0 = unlimited)</td></tr>
+      <tr><td><code>-max-memory-mb</code></td><td><code>1024</code></td><td>LRU bound on cached payload bytes (0 = unlimited)</td></tr>
+      <tr><td><code>-ttl</code></td><td>never</td><td>expire entries after this duration — set it if model weights can change under the same name</td></tr>
+      <tr><td><code>-normalize</code></td><td>off</td><td>opt-in matching rules: <code>trim,collapse,lowercase</code></td></tr>
+      <tr><td><code>-persist</code></td><td>off</td><td>snapshot file; loaded at start, written on shutdown and every <code>-persist-interval</code></td></tr>
+      <tr><td><code>-persist-interval</code></td><td><code>5m</code></td><td>periodic snapshot cadence</td></tr>
+      <tr><td><code>-admin-token</code></td><td>open</td><td>bearer token required for stats/report/metrics/flush/snapshot</td></tr>
+      <tr><td><code>-auth-mode</code></td><td><code>off</code></td><td>client key validation: <code>allowlist</code> or <code>verify</code></td></tr>
+      <tr><td><code>-api-keys</code> / <code>-api-keys-file</code></td><td>—</td><td>accepted client keys for allowlist mode (CSV / one per line)</td></tr>
+      <tr><td><code>-auth-cache-ttl</code></td><td><code>5m</code></td><td>how long a verify-mode verdict is trusted</td></tr>
+      <tr><td><code>-max-batch-items</code></td><td><code>2048</code></td><td>reject larger batches with 400</td></tr>
+      <tr><td><code>-max-body-mb</code></td><td><code>64</code></td><td>reject larger bodies with 413</td></tr>
+      <tr><td><code>-request-log</code></td><td>off</td><td>JSONL log of embedding requests — feeds <code>embedcache analyze</code></td></tr>
+      <tr><td><code>-request-log-max-mb</code></td><td><code>512</code></td><td>rotate the log at this size (one <code>.1</code> backup kept)</td></tr>
+      <tr><td><code>-pricing</code></td><td>built-in</td><td>JSON <code>{"model": $/1M tokens, "default": ...}</code> for the $ figures</td></tr>
+    </table>
+
+    <h2 id="analyzer">The waste analyzer</h2>
+    <p>The analyzer is how you find out whether embedcache is worth deploying —
+    <em>before</em> deploying it. Feed it JSONL request logs (one embedding request per
+    line, either raw bodies or wrapped under <code>body</code>/<code>request</code>/<code>payload</code>):</p>
+    <pre class="code">embedcache analyze requests.jsonl
+embedcache analyze -json requests.jsonl | jq .duplicate_rate
+cat logs/*.jsonl | embedcache analyze</pre>
+    <p>It fingerprints every input exactly like the live proxy, so its duplicate count is
+    exactly what the cache would have absorbed — validated to agree with a live proxy to
+    the item on identical traffic.</p>
+    <pre class="code"><span class="cm"># useful flags</span>
+-default-price 0.05   <span class="cm"># $/1M tokens for self-hosted models (amortized GPU cost)</span>
+-pricing costs.json   <span class="cm"># per-model prices</span>
+-normalize trim       <span class="cm"># preview what normalization would add</span>
+-top 25               <span class="cm"># show more of the top duplicated inputs</span></pre>
+    <p>To produce logs the analyzer can read, run the proxy with <code>-request-log</code>,
+    or dump requests from your own gateway/app — the format is forgiving.</p>
+
+    <h2 id="admin">Admin API</h2>
+    <table>
+      <tr><th>Endpoint</th><th>What it does</th></tr>
+      <tr><td><code>GET /healthz</code></td><td>liveness — always open, for load balancers</td></tr>
+      <tr><td><code>GET /_ec/stats</code></td><td>full stats as JSON (hit rate, tokens, $, per-model, per-caller, breaker state)</td></tr>
+      <tr><td><code>GET /_ec/report</code></td><td>the human waste report (also: <code>embedcache report -addr ...</code>)</td></tr>
+      <tr><td><code>GET /metrics</code></td><td>Prometheus text format</td></tr>
+      <tr><td><code>POST /_ec/flush</code></td><td>drop every cache entry — use when model weights change under the same name</td></tr>
+      <tr><td><code>POST /_ec/snapshot</code></td><td>write the persistence snapshot now (requires <code>-persist</code>)</td></tr>
+    </table>
+    <p>All of these except <code>/healthz</code> require <code>Authorization: Bearer
+    &lt;admin-token&gt;</code> when <code>-admin-token</code> is set. Set it.</p>
+
+    <h2 id="metrics">Metrics</h2>
+    <pre class="code">embedcache_requests_total                 <span class="cm"># embedding requests handled</span>
+embedcache_items_total{result="hit|miss|coalesced"}
+embedcache_upstream_calls_total           <span class="cm"># actual backend calls made</span>
+embedcache_upstream_retries_total
+embedcache_breaker_fast_fails_total       <span class="cm"># requests rejected while the circuit was open</span>
+embedcache_breaker_open                   <span class="cm"># gauge: 1 while failing fast</span>
+embedcache_saved_tokens_total / embedcache_spent_tokens_total
+embedcache_saved_usd                      <span class="cm"># at configured pricing</span>
+embedcache_cache_entries / embedcache_cache_bytes</pre>
+    <p>The two numbers worth alerting on: <code>embedcache_breaker_open == 1</code>
+    (your backend is down) and a falling hit rate (workload changed — rerun the analyzer).</p>
+
+    <h2 id="security">Security</h2>
+    <p>Two separate layers, both off by default for painless first contact, both required
+    for untrusted callers:</p>
+    <h3>1. Admin token</h3>
+    <pre class="code">embedcache serve -upstream ... -admin-token "$(openssl rand -hex 24)"</pre>
+    <p>Without it, anyone who can reach the port can flush your cache and read usage stats.</p>
+    <h3>2. Data-plane key validation</h3>
+    <p>Cache hits never touch the upstream — so without this, a revoked or missing API key
+    can still read cached vectors. Two modes:</p>
+    <pre class="code"><span class="cm"># allowlist: the proxy owns the key list (self-hosted backends with no auth)</span>
+embedcache serve -upstream http://localhost:8000 \
+  -auth-mode allowlist -api-keys-file keys.txt
+
+<span class="cm"># verify: keys are checked against the upstream (hosted providers)</span>
+embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
+    <p><code>verify</code> probes <code>GET /v1/models</code> with the caller's key and
+    caches the verdict for <code>-auth-cache-ttl</code> (rejections for 1 minute; fails
+    closed if the upstream is unreachable). Keys are stored in memory only as SHA-256 hashes.</p>
+    <div class="note warn">
+      embedcache listens in plaintext by design — terminate TLS in front of it
+      (Caddy, nginx, or your ingress). The request log stores raw input text; treat it
+      with the same care as the documents it came from.
+    </div>
+
+    <h2 id="resilience">Resilience</h2>
+    <p>Embedding calls are idempotent, so transient upstream failures (network errors, 5xx,
+    429) are retried with exponential backoff and jitter, honoring <code>Retry-After</code>.
+    Definitive 4xx errors are never retried and pass through verbatim.</p>
+    <p>Sustained failure trips a circuit breaker: after <code>-breaker-threshold</code>
+    consecutive faults, requests needing the upstream fail fast with 503 instead of stacking
+    timeouts. After <code>-breaker-cooldown</code>, one probe decides whether to close it.</p>
+    <div class="note">
+      <b>The property that matters:</b> cache hits keep serving while the circuit is open.
+      A warmed embedcache acts as a read-through fallback during backend outages — the outage
+      degrades misses, not the service.
+    </div>
+
+    <h2 id="persistence">Persistence &amp; TTL</h2>
+    <pre class="code">embedcache serve -upstream ... -persist /var/lib/embedcache/cache.snap -ttl 720h</pre>
+    <ul>
+      <li>The snapshot is loaded at start, written on graceful shutdown, every
+      <code>-persist-interval</code>, and on demand via <code>POST /_ec/snapshot</code>.
+      Writes are atomic (temp file + rename). A hard crash loses at most the entries since
+      the last snapshot — for a cache, that means a few extra misses, never wrong data.</li>
+      <li><code>-ttl</code> bounds staleness. If your model files can change under the same
+      model name (common with self-hosted fine-tune iterations), set a TTL or call
+      <code>/_ec/flush</code> on deploy — otherwise entries never expire, because for a
+      fixed model the correct answer never changes.</li>
+      <li>Memory: entries are bounded by <code>-max-entries</code> and
+      <code>-max-memory-mb</code> with LRU eviction, sharded 16 ways.</li>
+    </ul>
+
+    <h2 id="guarantees">Guarantees</h2>
+    <ul>
+      <li>A cache hit returns the byte-identical JSON value the upstream returned when the
+      entry was created — verified by fuzzing, at 430k-request scale, and across crash-restarts.</li>
+      <li>Batch responses preserve input order and index mapping under any mix of hits,
+      misses, and intra-batch duplicates.</li>
+      <li>A unique input in flight is computed upstream at most once across all concurrent
+      requests.</li>
+      <li>Upstream errors pass through with their original status and body, and are never cached.</li>
+      <li>Exact-match only: the wrong-vector rate of the cache is 0% by construction.</li>
+    </ul>
+
+    <h2 id="limitations">Limitations (read this)</h2>
+    <ul>
+      <li><b>Exact-match cannot absorb a re-chunk.</b> If you change your chunking
+      configuration, every chunk's text changes and everything re-embeds. Measured and
+      documented in <a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">E4</a>;
+      a chunk-diff engine is the roadmap answer.</li>
+      <li><b>Semantically similar ≠ identical.</b> "reset my password" and "how to reset
+      password" are different entries. Opt-in normalization (<code>trim,collapse,lowercase</code>)
+      widens matching slightly; semantic caching is deliberately not offered (see FAQ).</li>
+      <li><b>Single-node cache.</b> Each instance has its own memory; there is no shared
+      backend yet. One instance handles ~39k hit req/s, which covers a lot of ground before
+      this matters.</li>
+      <li><b>Your savings depend on your workload.</b> A real agent workload measured 49.7%
+      duplicate tokens; yours may be more or less. That is exactly what
+      <code>embedcache analyze</code> is for — measure before you deploy.</li>
+    </ul>
+
+    <h2 id="faq">FAQ</h2>
+    <h3>Why not semantic caching?</h3>
+    <p>Similarity-threshold caching returns <em>wrong answers</em> at some rate — published
+    evaluations show meaningful false-hit rates even at high thresholds. For embeddings
+    specifically, wrong vectors silently poison your vector store. Exact-match has a 0%
+    wrong-answer rate, and the analyzer proves how much it still saves.</p>
+    <h3>Is it a library or a framework?</h3>
+    <p>Neither — it's a service, like Redis or nginx. Your apps in any language talk to it
+    over HTTP without importing anything. That's the point: LangChain and LlamaIndex already
+    dedupe <em>inside Python</em>; embedcache does it for your whole stack.</p>
+    <h3>What happens when embedcache itself dies?</h3>
+    <p>Point your clients at the upstream directly — the API is passthrough-compatible, so
+    the failure mode is "you pay full price again," never "you're down." Restore from the
+    snapshot when it's back.</p>
+    <h3>Does it work with chat completions too?</h3>
+    <p>Non-embedding routes pass through unmodified. Caching chat responses is a different
+    problem (streaming, sampling temperature, wrong-answer risk) and out of scope on purpose.</p>
+    <h3>How do I know it's not lying about savings?</h3>
+    <p>Everything is measured and reproducible: the repo ships the
+    <a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">controlled experiments</a>
+    (re-run by CI on every push), a
+    <a href="https://github.com/Ajay6601/embedcache/blob/main/PRODSIM.md">430k-request production simulation</a>,
+    and a <a href="https://github.com/Ajay6601/embedcache/blob/main/REALTEST.md">real agent workload on live data</a>
+    with zero constructed duplicates.</p>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    embedcache · MIT license · <a href="https://github.com/Ajay6601/embedcache">GitHub</a> ·
+    <a href="index.html">Home</a> · <a href="examples.html">Examples</a>
+  </div>
+</footer>
+
+<script src="term.js"></script>
+</body>
+</html>

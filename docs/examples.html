@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Examples — embedcache</title>
+<meta name="description" content="Copy-paste recipes: Ollama, vLLM, OpenAI, Gemini, Docker, Kubernetes, Python, JavaScript, Go, LangChain, LlamaIndex, and ops workflows.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="top">
+  <a class="brand" href="index.html">embed<span>cache</span></a>
+  <div class="links">
+    <a href="docs.html">Docs</a>
+    <a href="examples.html" class="active">Examples</a>
+    <a href="https://github.com/Ajay6601/embedcache/blob/main/REALTEST.md">Evidence</a>
+    <a class="gh" href="https://github.com/Ajay6601/embedcache">GitHub &rarr;</a>
+  </div>
+</nav>
+
+<div class="wrap docs-layout">
+
+  <aside class="docs-side">
+    <h4>Backends</h4>
+    <a href="#ollama">Ollama</a>
+    <a href="#vllm">vLLM</a>
+    <a href="#tei">Text Embeddings Inference</a>
+    <a href="#openai">OpenAI</a>
+    <a href="#gemini">Google Gemini</a>
+    <h4>Clients</h4>
+    <a href="#curl">curl</a>
+    <a href="#python">Python</a>
+    <a href="#js">JavaScript / TypeScript</a>
+    <a href="#go">Go</a>
+    <a href="#langchain">LangChain</a>
+    <a href="#llamaindex">LlamaIndex</a>
+    <h4>Deploy</h4>
+    <a href="#docker">Docker</a>
+    <a href="#compose">Docker Compose</a>
+    <a href="#k8s">Kubernetes</a>
+    <a href="#systemd">systemd</a>
+    <h4>Workflows</h4>
+    <a href="#audit">Audit your logs</a>
+    <a href="#production">Production config</a>
+    <a href="#modelswap">Model redeploys</a>
+    <a href="#prometheus">Prometheus</a>
+    <a href="#multitenant">Multi-tenant accounting</a>
+  </aside>
+
+  <main class="docs-main">
+    <h1>Examples</h1>
+    <p>Everything below is copy-paste ready. The pattern is always the same: run
+    <code>embedcache serve -upstream &lt;your backend&gt;</code>, then point your client's
+    <code>base_url</code> at the proxy.</p>
+
+    <h2 id="ollama">Ollama (verified live)</h2>
+    <pre class="code">embedcache serve -upstream http://localhost:11434
+
+curl localhost:8090/v1/embeddings -H "Content-Type: application/json" \
+  -d '{"model": "all-minilm", "input": "hello world"}'</pre>
+    <p>All livecheck assertions pass against Ollama 0.22 / <code>all-minilm</code>,
+    including base64 encoding and mixed-batch mapping.</p>
+
+    <h2 id="vllm">vLLM</h2>
+    <pre class="code"><span class="cm"># vLLM serving an embedding model on :8000</span>
+vllm serve intfloat/e5-mistral-7b-instruct
+
+embedcache serve -upstream http://localhost:8000</pre>
+    <p>vLLM's OpenAI-compatible server exposes <code>/v1/embeddings</code>; embedcache
+    mirrors whatever path your client calls, so no path configuration is needed.</p>
+
+    <h2 id="tei">Text Embeddings Inference (TEI)</h2>
+    <pre class="code">docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:latest \
+  --model-id BAAI/bge-large-en-v1.5
+
+embedcache serve -upstream http://localhost:8080</pre>
+    <div class="note warn">TEI note: use its OpenAI-compatible <code>/v1/embeddings</code>
+    route (available in current TEI). If you use <code>-auth-mode verify</code>, confirm your
+    TEI version serves <code>/v1/models</code>; otherwise use <code>allowlist</code> mode.</div>
+
+    <h2 id="openai">OpenAI</h2>
+    <pre class="code"><span class="cm"># forward each caller's own API key (default)</span>
+embedcache serve -upstream https://api.openai.com
+
+<span class="cm"># or pin one org-wide key and validate callers yourself</span>
+embedcache serve -upstream https://api.openai.com \
+  -upstream-api-key $OPENAI_API_KEY \
+  -auth-mode allowlist -api-keys-file team-keys.txt</pre>
+
+    <h2 id="gemini">Google Gemini (verified live)</h2>
+    <pre class="code">embedcache serve \
+  -upstream https://generativelanguage.googleapis.com/v1beta/openai \
+  -upstream-api-key $GEMINI_API_KEY</pre>
+    <p>Set your client's <code>base_url</code> to <code>http://localhost:8090</code>
+    (without <code>/v1</code> — Google's compat endpoint uses bare <code>/embeddings</code>,
+    and embedcache mirrors the client path). Current embedding model:
+    <code>gemini-embedding-001</code> (3072 dims — at ~67&nbsp;KB per vector, every cache hit
+    also skips a full internet round-trip).</p>
+
+    <h2 id="curl">curl</h2>
+    <pre class="code"><span class="cm"># watch the cache work</span>
+curl -s -D - -o /dev/null localhost:8090/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"all-minilm","input":"hello"}' | grep -i x-embedcache
+<span class="cm"># X-Embedcache-Status: miss   (first time)</span>
+<span class="cm"># X-Embedcache-Status: hit    (every time after)</span></pre>
+
+    <h2 id="python">Python (OpenAI SDK)</h2>
+    <pre class="code"><span class="kw">from</span> openai <span class="kw">import</span> OpenAI
+
+client = OpenAI(base_url=<span class="st">"http://localhost:8090/v1"</span>, api_key=<span class="st">"sk-..."</span>)
+resp = client.embeddings.create(
+    model=<span class="st">"text-embedding-3-small"</span>,
+    input=[<span class="st">"first text"</span>, <span class="st">"second text"</span>],
+)
+<span class="cm"># resp.usage.prompt_tokens == only what THIS call was billed upstream</span></pre>
+
+    <h2 id="js">JavaScript / TypeScript</h2>
+    <pre class="code"><span class="kw">import</span> OpenAI <span class="kw">from</span> <span class="st">"openai"</span>;
+
+<span class="kw">const</span> client = <span class="kw">new</span> OpenAI({
+  baseURL: <span class="st">"http://localhost:8090/v1"</span>,
+  apiKey: process.env.OPENAI_API_KEY,
+});
+<span class="kw">const</span> { data } = <span class="kw">await</span> client.embeddings.create({
+  model: <span class="st">"text-embedding-3-small"</span>,
+  input: [<span class="st">"first text"</span>, <span class="st">"second text"</span>],
+});</pre>
+
+    <h2 id="go">Go (no SDK needed)</h2>
+    <pre class="code">body, _ := json.Marshal(map[string]any{
+    <span class="st">"model"</span>: <span class="st">"all-minilm"</span>,
+    <span class="st">"input"</span>: []string{<span class="st">"first text"</span>, <span class="st">"second text"</span>},
+})
+resp, err := http.Post(<span class="st">"http://localhost:8090/v1/embeddings"</span>,
+    <span class="st">"application/json"</span>, bytes.NewReader(body))</pre>
+
+    <h2 id="langchain">LangChain</h2>
+    <pre class="code"><span class="kw">from</span> langchain_openai <span class="kw">import</span> OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    base_url=<span class="st">"http://localhost:8090/v1"</span>,
+    model=<span class="st">"text-embedding-3-small"</span>,
+)
+<span class="cm"># every vectorstore .add_documents / .similarity_search now dedupes for free,</span>
+<span class="cm"># across every process and language that shares the proxy — not just this one</span></pre>
+
+    <h2 id="llamaindex">LlamaIndex</h2>
+    <pre class="code"><span class="kw">from</span> llama_index.embeddings.openai <span class="kw">import</span> OpenAIEmbedding
+
+embed_model = OpenAIEmbedding(
+    api_base=<span class="st">"http://localhost:8090/v1"</span>,
+    model=<span class="st">"text-embedding-3-small"</span>,
+)</pre>
+
+    <h2 id="docker">Docker</h2>
+    <pre class="code">git clone https://github.com/Ajay6601/embedcache && cd embedcache
+docker build -t embedcache .
+docker run -p 8090:8090 embedcache serve -listen :8090 \
+  -upstream http://host.docker.internal:11434</pre>
+
+    <h2 id="compose">Docker Compose (embedcache + Ollama)</h2>
+    <pre class="code">services:
+  ollama:
+    image: ollama/ollama
+    volumes: [<span class="st">"ollama:/root/.ollama"</span>]
+
+  embedcache:
+    build: https://github.com/Ajay6601/embedcache.git
+    command: >
+      serve -listen :8090 -upstream http://ollama:11434
+      -persist /data/cache.snap -request-log /data/requests.jsonl
+      -admin-token ${EC_ADMIN_TOKEN}
+    ports: [<span class="st">"8090:8090"</span>]
+    volumes: [<span class="st">"ecdata:/data"</span>]
+    depends_on: [ollama]
+
+volumes: { ollama: {}, ecdata: {} }</pre>
+
+    <h2 id="k8s">Kubernetes</h2>
+    <pre class="code">apiVersion: apps/v1
+kind: Deployment
+metadata: { name: embedcache }
+spec:
+  replicas: 1                     <span class="cm"># cache is per-pod; see docs &sect; limitations</span>
+  selector: { matchLabels: { app: embedcache } }
+  template:
+    metadata: { labels: { app: embedcache } }
+    spec:
+      containers:
+      - name: embedcache
+        image: your-registry/embedcache:latest
+        args: [<span class="st">"serve"</span>, <span class="st">"-listen"</span>, <span class="st">":8090"</span>,
+               <span class="st">"-upstream"</span>, <span class="st">"http://vllm.inference.svc:8000"</span>,
+               <span class="st">"-persist"</span>, <span class="st">"/data/cache.snap"</span>,
+               <span class="st">"-admin-token"</span>, <span class="st">"$(ADMIN_TOKEN)"</span>]
+        env:
+        - name: ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: embedcache, key: admin-token } }
+        ports: [{ containerPort: 8090 }]
+        livenessProbe: { httpGet: { path: /healthz, port: 8090 } }
+        volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+      - name: data
+        persistentVolumeClaim: { claimName: embedcache-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: embedcache }
+spec:
+  selector: { app: embedcache }
+  ports: [{ port: 8090 }]</pre>
+
+    <h2 id="systemd">systemd</h2>
+    <pre class="code">[Unit]
+Description=embedcache embedding proxy
+After=network-online.target
+
+[Service]
+EnvironmentFile=/etc/embedcache/env    <span class="cm"># contains ADMIN_TOKEN=...</span>
+ExecStart=/usr/local/bin/embedcache serve \
+  -upstream http://localhost:8000 \
+  -persist /var/lib/embedcache/cache.snap \
+  -admin-token ${ADMIN_TOKEN}
+DynamicUser=yes
+StateDirectory=embedcache
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target</pre>
+
+    <h2 id="audit">Workflow: audit your existing logs (no install in the request path)</h2>
+    <pre class="code"><span class="cm"># 1. dump embedding request bodies from whatever you have — gateway logs,</span>
+<span class="cm">#    app logs, LiteLLM logs — one JSON object per line</span>
+<span class="cm"># 2. run the analyzer</span>
+embedcache analyze -default-price 0.05 requests.jsonl
+
+<span class="cm"># machine-readable, for a dashboard or a slack bot</span>
+embedcache analyze -json requests.jsonl | jq '{rate: .duplicate_rate, wasted_usd: .wasted_usd_est}'</pre>
+    <p>The number it prints is the exact share an exact-match cache would have absorbed —
+    the analyzer and the live proxy agreed to the item when validated on identical traffic.</p>
+
+    <h2 id="production">Workflow: full production config</h2>
+    <pre class="code">embedcache serve \
+  -listen 127.0.0.1:8090 \
+  -upstream http://localhost:8000 \
+  -admin-token  "$(cat /etc/embedcache/admin-token)" \
+  -auth-mode    allowlist -api-keys-file /etc/embedcache/keys.txt \
+  -ttl          720h \
+  -persist      /var/lib/embedcache/cache.snap \
+  -request-log  /var/log/embedcache/requests.jsonl \
+  -pricing      /etc/embedcache/pricing.json
+
+<span class="cm"># pricing.json — give self-hosted models an amortized GPU cost so the</span>
+<span class="cm"># waste report speaks in dollars:</span>
+{ "bge-large-en-v1.5": 0.03, "default": 0.05 }</pre>
+
+    <h2 id="modelswap">Workflow: redeploying a model under the same name</h2>
+    <pre class="code"><span class="cm"># cached vectors are only valid for the weights that produced them —</span>
+<span class="cm"># flush on deploy, or run with -ttl as a safety net</span>
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/flush
+
+<span class="cm"># take a snapshot before risky changes</span>
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/snapshot</pre>
+
+    <h2 id="prometheus">Workflow: Prometheus + alerts</h2>
+    <pre class="code">scrape_configs:
+  - job_name: embedcache
+    static_configs: [{ targets: ["embedcache:8090"] }]
+    authorization: { credentials: "your-admin-token" }
+
+<span class="cm"># alert when the backend is down (cache keeps serving hits meanwhile)</span>
+- alert: EmbedcacheCircuitOpen
+  expr: embedcache_breaker_open == 1
+  for: 1m</pre>
+
+    <h2 id="multitenant">Workflow: multi-tenant cost accounting</h2>
+    <pre class="code"><span class="cm"># give each team its own key</span>
+embedcache serve -upstream http://localhost:8000 \
+  -auth-mode allowlist -api-keys team-search-x9f,team-rag-k2m,team-agents-p7q
+
+<span class="cm"># per-caller usage shows up in stats (keys appear as short hashes)</span>
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/stats \
+  | jq .per_caller</pre>
+    <p>Every team shares one cache — team A's ingestion warms team B's queries — while
+    usage is attributed per key.</p>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    embedcache · MIT license · <a href="https://github.com/Ajay6601/embedcache">GitHub</a> ·
+    <a href="index.html">Home</a> · <a href="docs.html">Docs</a>
+  </div>
+</footer>
+
+<script src="term.js"></script>
+</body>
+</html>
