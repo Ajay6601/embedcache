@@ -17,7 +17,11 @@ Zero dependencies — pure Go stdlib. One static binary. No Python runtime, no R
 
 Embedding workloads are full of silent duplicate work: re-ingesting a corpus where 95% of chunks didn't change, hot queries embedded thousands of times, retry storms, multiple services embedding the same strings. Frameworks solve this *inside* Python (LangChain's RecordManager, LlamaIndex's IngestionPipeline) — useless if your pipeline is Go, TypeScript, custom, or split across teams. Gateways treat it as a checkbox: LiteLLM's embedding cache has a [known bug](https://github.com/BerriAI/litellm/issues/22659) where mixed cached/uncached batches can return wrong vectors.
 
-embedcache does one thing, language-agnostically, and provably correctly — see [EXPERIMENTS.md](EXPERIMENTS.md) for the controlled validation run and [PRODSIM.md](PRODSIM.md) for a production-scale simulation against real Ollama inference (50k-chunk corpus, 300k-request storm at 39k req/s, hostile-traffic mix, crash recovery — all security features on):
+embedcache does one thing, language-agnostically, and provably correctly. Three tiers of evidence live in this repo:
+
+- [EXPERIMENTS.md](EXPERIMENTS.md) — controlled validation against a deterministic mock (re-run by CI on every push)
+- [PRODSIM.md](PRODSIM.md) — production-scale simulation: 50k-chunk corpus, 300k-request storm at 39k req/s, hostile-traffic mix, crash recovery, all security features on
+- [REALTEST.md](REALTEST.md) — a **real workload with zero constructed duplicates**: a working RAG agent over 103 live Wikipedia articles, real LLM answers, and a live-refresh pass. Measured organically: **49.7% of the workload's embedding tokens were duplicate work** — 21.7% of the agent's query traffic repeated, and the refresh pass re-embedded a corpus where nothing had changed and was 100% absorbed.
 
 | Claim | Evidence |
 |---|---|
