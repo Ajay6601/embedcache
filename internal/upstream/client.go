@@ -78,11 +78,20 @@ func New(base string, apiKey string, timeout time.Duration) (*Client, error) {
 	}, nil
 }
 
+// RequestMeta carries the parts of the client's request the upstream call
+// must mirror: the path (vLLM/Ollama/TEI route variants), the query string
+// (Azure OpenAI's ?api-version=...), and the caller's credentials.
+type RequestMeta struct {
+	Path          string
+	RawQuery      string
+	Authorization string
+	APIKeyHeader  string // Azure OpenAI's api-key header
+}
+
 // Embeddings sends one embeddings request for the given items and returns the
-// parsed response with data sorted by index. path is the path the client hit
-// (mirrored so vLLM/Ollama/TEI route variants all work). Transient failures
-// are retried with exponential backoff; sustained failures open the breaker.
-func (c *Client) Embeddings(ctx context.Context, path string, req api.EmbeddingsRequest, items []api.InputItem, clientAuth string) (*api.EmbeddingsResponse, error) {
+// parsed response with data sorted by index. Transient failures are retried
+// with exponential backoff; sustained failures open the breaker.
+func (c *Client) Embeddings(ctx context.Context, meta RequestMeta, req api.EmbeddingsRequest, items []api.InputItem) (*api.EmbeddingsResponse, error) {
 	if !c.Breaker.Allow() {
 		return nil, ErrCircuitOpen
 	}
@@ -98,7 +107,7 @@ func (c *Client) Embeddings(ctx context.Context, path string, req api.Embeddings
 				return nil, ctx.Err()
 			}
 		}
-		resp, err := c.embedOnce(ctx, path, req, items, clientAuth)
+		resp, err := c.embedOnce(ctx, meta, req, items)
 		if err == nil {
 			c.Breaker.Success()
 			return resp, nil
@@ -146,7 +155,7 @@ func backoffFor(attempt int, lastErr error) time.Duration {
 	return base + time.Duration(rand.Int63n(int64(base/4+1)))
 }
 
-func (c *Client) embedOnce(ctx context.Context, path string, req api.EmbeddingsRequest, items []api.InputItem, clientAuth string) (*api.EmbeddingsResponse, error) {
+func (c *Client) embedOnce(ctx context.Context, meta RequestMeta, req api.EmbeddingsRequest, items []api.InputItem) (*api.EmbeddingsResponse, error) {
 	input, err := api.MarshalInputs(items)
 	if err != nil {
 		return nil, err
@@ -158,7 +167,8 @@ func (c *Client) embedOnce(ctx context.Context, path string, req api.EmbeddingsR
 	}
 
 	u := *c.Base
-	u.Path = strings.TrimRight(u.Path, "/") + path
+	u.Path = strings.TrimRight(u.Path, "/") + meta.Path
+	u.RawQuery = meta.RawQuery
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -167,8 +177,11 @@ func (c *Client) embedOnce(ctx context.Context, path string, req api.EmbeddingsR
 	switch {
 	case c.APIKey != "":
 		hreq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	case clientAuth != "":
-		hreq.Header.Set("Authorization", clientAuth)
+	case meta.Authorization != "":
+		hreq.Header.Set("Authorization", meta.Authorization)
+	}
+	if meta.APIKeyHeader != "" {
+		hreq.Header.Set("api-key", meta.APIKeyHeader)
 	}
 
 	resp, err := c.HTTP.Do(hreq)

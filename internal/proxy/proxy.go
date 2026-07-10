@@ -115,8 +115,14 @@ func (p *Proxy) rotateLogLocked() {
 }
 
 func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
+	// Azure-style clients authenticate with an api-key header instead of
+	// Authorization; treat either as the caller credential
+	credential := r.Header.Get("Authorization")
+	if credential == "" {
+		credential = r.Header.Get("api-key")
+	}
 	if p.Auth != nil {
-		if ok, reason := p.Auth.Allow(r.Context(), r.Header.Get("Authorization")); !ok {
+		if ok, reason := p.Auth.Allow(r.Context(), credential); !ok {
 			p.Stats.RecordError()
 			writeError(w, http.StatusUnauthorized, reason)
 			return
@@ -157,9 +163,10 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	p.logRequest(&req)
 
+	paramsDigest := fingerprint.ParamsDigest(req.Extra)
 	keys := make([]string, len(items))
 	for i := range items {
-		keys[i] = fingerprint.Key(req.Model, req.Dimensions, req.EncodingFormat, items[i], p.Norm)
+		keys[i] = fingerprint.Key(req.Model, req.Dimensions, req.EncodingFormat, paramsDigest, items[i], p.Norm)
 	}
 
 	entries := make([]cache.Entry, len(items))
@@ -212,8 +219,15 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 				EncodingFormat: req.EncodingFormat,
 				Dimensions:     req.Dimensions,
 				User:           req.User,
+				Extra:          req.Extra,
 			}
-			uresp, err := p.Upstream.Embeddings(r.Context(), r.URL.Path, ureq, ownedItems, r.Header.Get("Authorization"))
+			meta := upstream.RequestMeta{
+				Path:          r.URL.Path,
+				RawQuery:      r.URL.RawQuery,
+				Authorization: r.Header.Get("Authorization"),
+				APIKeyHeader:  r.Header.Get("api-key"), // Azure OpenAI style
+			}
+			uresp, err := p.Upstream.Embeddings(r.Context(), meta, ureq, ownedItems)
 			if err != nil {
 				for _, k := range owned {
 					p.Group.Fail(k, err)
@@ -231,7 +245,12 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 			if uresp.Model != "" {
 				respModel = uresp.Model
 			}
-			perItem := tokens.Apportion(uresp.Usage.PromptTokens, ownedItems)
+			// some providers (Voyage) report only total_tokens
+			billed := uresp.Usage.PromptTokens
+			if billed == 0 {
+				billed = uresp.Usage.TotalTokens
+			}
+			perItem := tokens.Apportion(billed, ownedItems)
 			var expires int64
 			if p.CacheTTL > 0 {
 				expires = time.Now().Add(p.CacheTTL).UnixNano()
@@ -273,7 +292,7 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	p.Stats.Record(stats.RequestRecord{
 		Model:         req.Model,
-		Caller:        callerHash(r.Header.Get("Authorization")),
+		Caller:        callerHash(credential),
 		Hits:          hits,
 		Misses:        misses,
 		Coalesced:     coalesced,

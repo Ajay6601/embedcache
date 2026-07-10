@@ -24,8 +24,54 @@ func okBody(n int) []byte {
 }
 
 func call(c *Client) (*api.EmbeddingsResponse, error) {
-	return c.Embeddings(context.Background(), "/v1/embeddings",
-		api.EmbeddingsRequest{Model: "m"}, []api.InputItem{{Text: "x"}}, "")
+	return c.Embeddings(context.Background(), RequestMeta{Path: "/v1/embeddings"},
+		api.EmbeddingsRequest{Model: "m"}, []api.InputItem{{Text: "x"}})
+}
+
+func TestQueryAndAPIKeyHeaderForwarded(t *testing.T) {
+	var gotQuery, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotAPIKey = r.Header.Get("api-key")
+		w.Write(okBody(1))
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "", 0)
+	_, err := c.Embeddings(context.Background(),
+		RequestMeta{Path: "/openai/deployments/embed/embeddings", RawQuery: "api-version=2024-02-01", APIKeyHeader: "azure-key-123"},
+		api.EmbeddingsRequest{Model: "m"}, []api.InputItem{{Text: "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery != "api-version=2024-02-01" {
+		t.Fatalf("query not forwarded: %q", gotQuery)
+	}
+	if gotAPIKey != "azure-key-123" {
+		t.Fatalf("api-key header not forwarded: %q", gotAPIKey)
+	}
+}
+
+func TestExtraParamsForwardedVerbatim(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write(okBody(1))
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "", 0)
+	req := api.EmbeddingsRequest{
+		Model: "voyage-4",
+		Extra: map[string]json.RawMessage{
+			"input_type":   json.RawMessage(`"query"`),
+			"output_dtype": json.RawMessage(`"float"`),
+		},
+	}
+	if _, err := c.Embeddings(context.Background(), RequestMeta{Path: "/v1/embeddings"}, req, []api.InputItem{{Text: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if string(gotBody["input_type"]) != `"query"` || string(gotBody["output_dtype"]) != `"float"` {
+		t.Fatalf("extra params not forwarded: %v", gotBody)
+	}
 }
 
 func TestRetriesTransientFailures(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,6 +371,52 @@ func TestCacheTTLEndToEnd(t *testing.T) {
 	_, r3 := embed(t, srv.URL, map[string]any{"model": "m1", "input": "ttl probe"})
 	if r3.Header.Get("X-Embedcache-Status") != "miss" {
 		t.Fatalf("after TTL must miss, got %q", r3.Header.Get("X-Embedcache-Status"))
+	}
+}
+
+// TestProviderParamsAreCacheIdentity covers the Voyage-class bug: the same
+// text under input_type "query" vs "document" yields DIFFERENT vectors, so
+// they must be separate cache entries and the parameter must reach upstream.
+func TestProviderParamsAreCacheIdentity(t *testing.T) {
+	// upstream that varies its answer by input_type, like Voyage does
+	var calls atomic.Int32
+	varying := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body map[string]json.RawMessage
+		json.NewDecoder(r.Body).Decode(&body)
+		vec := `[1,1]`
+		if string(body["input_type"]) == `"document"` {
+			vec = `[2,2]`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":%s}],"model":"voyage-4","usage":{"total_tokens":3}}`, vec)
+	}))
+	defer varying.Close()
+
+	up, _ := upstream.New(varying.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	asQuery, _ := embed(t, srv.URL, map[string]any{"model": "voyage-4", "input": "same text", "input_type": "query"})
+	asDoc, _ := embed(t, srv.URL, map[string]any{"model": "voyage-4", "input": "same text", "input_type": "document"})
+	if string(asQuery.Data[0].Embedding) != `[1,1]` {
+		t.Fatalf("input_type was not forwarded upstream: got %s", asQuery.Data[0].Embedding)
+	}
+	if string(asDoc.Data[0].Embedding) != `[2,2]` {
+		t.Fatalf("document request served the query vector: %s — cache collision across params", asDoc.Data[0].Embedding)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 upstream calls (distinct entries), got %d", calls.Load())
+	}
+	// and each must now hit its own entry
+	q2, r := embed(t, srv.URL, map[string]any{"model": "voyage-4", "input": "same text", "input_type": "query"})
+	if r.Header.Get("X-Embedcache-Status") != "hit" || string(q2.Data[0].Embedding) != `[1,1]` {
+		t.Fatal("repeat query-typed request must hit its own entry")
+	}
+	// usage came as total_tokens only (Voyage shape) — savings must still count
+	if p.Stats.Snapshot(pricing.Default(), 0, 0).SavedTokens == 0 {
+		t.Fatal("total_tokens-only usage must still feed savings accounting")
 	}
 }
 
