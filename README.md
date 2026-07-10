@@ -17,7 +17,7 @@ Zero dependencies — pure Go stdlib. One static binary. No Python runtime, no R
 
 Embedding workloads are full of silent duplicate work: re-ingesting a corpus where 95% of chunks didn't change, hot queries embedded thousands of times, retry storms, multiple services embedding the same strings. Frameworks solve this *inside* Python (LangChain's RecordManager, LlamaIndex's IngestionPipeline) — useless if your pipeline is Go, TypeScript, custom, or split across teams. Gateways treat it as a checkbox: LiteLLM's embedding cache has a [known bug](https://github.com/BerriAI/litellm/issues/22659) where mixed cached/uncached batches can return wrong vectors.
 
-embedcache does one thing, language-agnostically, and provably correctly — see [EXPERIMENTS.md](EXPERIMENTS.md) for the full validation run against the real binary:
+embedcache does one thing, language-agnostically, and provably correctly — see [EXPERIMENTS.md](EXPERIMENTS.md) for the controlled validation run and [PRODSIM.md](PRODSIM.md) for a production-scale simulation against real Ollama inference (50k-chunk corpus, 300k-request storm at 39k req/s, hostile-traffic mix, crash recovery — all security features on):
 
 | Claim | Evidence |
 |---|---|
