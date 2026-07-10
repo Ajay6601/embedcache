@@ -66,7 +66,9 @@ Your `Authorization` header is forwarded to the upstream (or pin one with `-upst
 | Google Gemini | `-upstream https://generativelanguage.googleapis.com/v1beta/openai -upstream-api-key $GEMINI_API_KEY` | `gemini-embedding-001` (3072-dim) |
 | OpenAI | `-upstream https://api.openai.com` | wire-identical to the above |
 
-Groq is not applicable: its API has no embeddings endpoint (chat/audio only).
+**Wire-compatible** (OpenAI-shaped APIs, covered by unit tests): [Voyage AI](https://docs.voyageai.com) (`-upstream https://api.voyageai.com` — the provider Anthropic officially recommends for embeddings; `input_type` and other Voyage params are forwarded verbatim and part of the cache identity, so query- and document-typed vectors never collide), Mistral (`-upstream https://api.mistral.ai`, `mistral-embed`), and Azure OpenAI (deployment paths, `?api-version=` query and `api-key` header are mirrored upstream).
+
+Not applicable: Groq and the Anthropic API itself — neither offers an embeddings endpoint (Anthropic recommends Voyage, above).
 
 Every response tells you what happened:
 

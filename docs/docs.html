@@ -102,9 +102,12 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
     <h2 id="how">How it works</h2>
     <ol>
       <li><b>Fingerprint.</b> Each input item is hashed with its full identity:
-      <code>SHA-256(model, dimensions, encoding_format, content)</code>. Two items share a
-      cache entry only when the upstream response is guaranteed interchangeable. Token-array
-      inputs are supported and never collide with text.</li>
+      <code>SHA-256(model, dimensions, encoding_format, provider params, content)</code>.
+      Provider-specific parameters (Voyage's <code>input_type</code>/<code>output_dtype</code>,
+      Mistral extras, vLLM options) are forwarded upstream verbatim and included in the key —
+      the same text under different params gets different vectors, so it gets different
+      entries. Two items share a cache entry only when the upstream response is guaranteed
+      interchangeable. Token-array inputs are supported and never collide with text.</li>
       <li><b>Split the batch.</b> Cached items are answered from memory as byte-exact replays
       of the upstream's original JSON. Items currently being computed by <em>any other
       request</em> are coalesced — the request waits for that result instead of recomputing.

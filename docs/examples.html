@@ -29,6 +29,9 @@
     <a href="#tei">Text Embeddings Inference</a>
     <a href="#openai">OpenAI</a>
     <a href="#gemini">Google Gemini</a>
+    <a href="#voyage">Voyage AI (Anthropic stack)</a>
+    <a href="#mistral">Mistral</a>
+    <a href="#azure">Azure OpenAI</a>
     <h4>Clients</h4>
     <a href="#curl">curl</a>
     <a href="#python">Python</a>
@@ -98,6 +101,44 @@ embedcache serve -upstream https://api.openai.com \
     and embedcache mirrors the client path). Current embedding model:
     <code>gemini-embedding-001</code> (3072 dims — at ~67&nbsp;KB per vector, every cache hit
     also skips a full internet round-trip).</p>
+
+    <h2 id="voyage">Voyage AI — the Anthropic/Claude stack</h2>
+    <p>Anthropic offers no embeddings API of its own and officially recommends
+    <a href="https://docs.voyageai.com">Voyage AI</a>. Voyage's
+    <code>/v1/embeddings</code> is wire-compatible, and its extra parameters are
+    handled correctly:</p>
+    <pre class="code">embedcache serve -upstream https://api.voyageai.com \
+  -upstream-api-key $VOYAGE_API_KEY
+
+curl localhost:8090/v1/embeddings -H "Content-Type: application/json" \
+  -d '{"model": "voyage-4", "input": "hello", "input_type": "query"}'</pre>
+    <div class="note">
+      Voyage returns <em>different vectors</em> for the same text under
+      <code>input_type: "query"</code> vs <code>"document"</code>. embedcache forwards
+      provider-specific parameters verbatim and includes them in the cache identity, so
+      query-typed and document-typed embeddings never collide. Same handling applies to
+      <code>output_dtype</code>, <code>output_dimension</code>, and any other extra field.
+    </div>
+
+    <h2 id="mistral">Mistral</h2>
+    <pre class="code">embedcache serve -upstream https://api.mistral.ai \
+  -upstream-api-key $MISTRAL_API_KEY
+
+curl localhost:8090/v1/embeddings -H "Content-Type: application/json" \
+  -d '{"model": "mistral-embed", "input": ["hello", "world"]}'</pre>
+
+    <h2 id="azure">Azure OpenAI</h2>
+    <p>Azure routes by deployment path and version query string, and authenticates with
+    an <code>api-key</code> header — embedcache mirrors all three:</p>
+    <pre class="code">embedcache serve -upstream https://YOUR-RESOURCE.openai.azure.com
+
+<span class="cm"># client base_url points at the proxy with the full deployment path</span>
+curl "localhost:8090/openai/deployments/YOUR-DEPLOYMENT/embeddings?api-version=2024-02-01" \
+  -H "api-key: $AZURE_OPENAI_KEY" -H "Content-Type: application/json" \
+  -d '{"input": "hello", "model": "text-embedding-3-small"}'</pre>
+    <div class="note">The query string and <code>api-key</code> header are forwarded
+    upstream; the <code>api-key</code> value is also used as the caller identity for
+    allowlist auth and per-caller accounting.</div>
 
     <h2 id="curl">curl</h2>
     <pre class="code"><span class="cm"># watch the cache work</span>
