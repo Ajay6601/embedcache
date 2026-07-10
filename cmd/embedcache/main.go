@@ -20,6 +20,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/auth"
 	"github.com/Ajay6601/embedcache/internal/breaker"
 	"github.com/Ajay6601/embedcache/internal/cache"
+	"github.com/Ajay6601/embedcache/internal/chunker"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
 	"github.com/Ajay6601/embedcache/internal/pricing"
 	"github.com/Ajay6601/embedcache/internal/proxy"
@@ -43,6 +44,8 @@ func main() {
 		err = runAnalyze(os.Args[2:])
 	case "report":
 		err = runReport(os.Args[2:])
+	case "chunk":
+		err = runChunk(os.Args[2:])
 	case "version":
 		fmt.Println("embedcache", version)
 	case "help", "-h", "--help":
@@ -65,9 +68,10 @@ usage:
   embedcache serve   -upstream URL [flags]   run the caching proxy
   embedcache analyze [flags] [file ...]      offline waste report from JSONL request logs (or stdin)
   embedcache report  [-addr URL]             fetch the live waste report from a running proxy
+  embedcache chunk   [flags] [file]          split a file into content-defined chunks (stdin if no file)
   embedcache version
 
-run "embedcache serve -h" or "embedcache analyze -h" for flags.
+run "embedcache serve -h", "embedcache analyze -h", or "embedcache chunk -h" for flags.
 `)
 }
 
@@ -301,4 +305,44 @@ func runReport(args []string) error {
 	defer resp.Body.Close()
 	_, err = io.Copy(os.Stdout, resp.Body)
 	return err
+}
+
+// runChunk splits a file into content-defined chunks so an ingestion
+// pipeline in any language can pipe the output straight into batched
+// /v1/embeddings calls. Because boundaries are content-defined, editing one
+// part of a document only changes the chunks touching the edit — the rest
+// re-chunk to byte-identical text and hit embedcache's cache on re-ingestion,
+// closing the gap fixed-size chunking has (see EXPERIMENTS.md E4).
+func runChunk(args []string) error {
+	fs := flag.NewFlagSet("chunk", flag.ExitOnError)
+	min := fs.Int("min", chunker.DefaultMin, "minimum chunk size in bytes")
+	avg := fs.Int("avg", chunker.DefaultAvg, "target average chunk size in bytes")
+	max := fs.Int("max", chunker.DefaultMax, "maximum chunk size in bytes")
+	fs.Parse(args)
+
+	var (
+		data []byte
+		err  error
+	)
+	if fs.NArg() > 0 {
+		data, err = os.ReadFile(fs.Arg(0))
+	} else {
+		data, err = io.ReadAll(os.Stdin)
+	}
+	if err != nil {
+		return err
+	}
+
+	chunks := chunker.Split(data, chunker.Options{Min: *min, Avg: *avg, Max: *max})
+	enc := json.NewEncoder(os.Stdout)
+	for _, c := range chunks {
+		if err := enc.Encode(struct {
+			Hash string `json:"hash"`
+			Size int    `json:"size"`
+			Text string `json:"text"`
+		}{c.Hash, len(c.Data), string(c.Data)}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
