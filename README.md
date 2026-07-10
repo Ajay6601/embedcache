@@ -1,5 +1,9 @@
 # embedcache
 
+**[Website](https://ajay6601.github.io/embedcache/) · [Documentation](https://ajay6601.github.io/embedcache/docs.html) · [Examples](https://ajay6601.github.io/embedcache/examples.html)**
+
+![embedcache demo — the offline waste analyzer finding duplicate embedding spend](docs/assets/demo.gif)
+
 **The cost-control and dedupe layer for embedding APIs.** A single-binary proxy that sits in front of any OpenAI-compatible embedding backend — vLLM, Ollama, text-embeddings-inference, or api.openai.com — and eliminates duplicate work before it reaches your GPUs or your API bill. Then it hands you the invoice for what it saved.
 
 ```
