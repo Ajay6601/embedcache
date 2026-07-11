@@ -21,12 +21,13 @@ Zero dependencies - pure Go stdlib. One static binary. No Python runtime, no Red
 
 Embedding workloads are full of silent duplicate work: re-ingesting a corpus where 95% of chunks didn't change, hot queries embedded thousands of times, retry storms, multiple services embedding the same strings. Frameworks solve this *inside* Python (LangChain's RecordManager, LlamaIndex's IngestionPipeline) - useless if your pipeline is Go, TypeScript, custom, or split across teams. Gateways treat it as a checkbox: LiteLLM's embedding cache has a [known bug](https://github.com/BerriAI/litellm/issues/22659) where mixed cached/uncached batches can return wrong vectors.
 
-embedcache does one thing, language-agnostically, and provably correctly. Three tiers of evidence live in this repo:
+embedcache does one thing, language-agnostically, and provably correctly. Multiple tiers of evidence live in this repo:
 
 - [EXPERIMENTS.md](EXPERIMENTS.md) - controlled validation against a deterministic mock (re-run by CI on every push)
 - [PRODSIM.md](PRODSIM.md) - production-scale simulation: 50k-chunk corpus, 300k-request storm at 39k req/s, hostile-traffic mix, crash recovery, all security features on
 - [REALTEST.md](REALTEST.md) - a **real workload with zero constructed duplicates**: a working RAG agent over 103 live Wikipedia articles, real LLM answers, and a live-refresh pass. Measured organically: **49.7% of the workload's embedding tokens were duplicate work** - 21.7% of the agent's query traffic repeated, and the refresh pass re-embedded a corpus where nothing had changed and was 100% absorbed.
 - [CHUNKDIFF.md](CHUNKDIFF.md) - the chunk-diff engine on one real, live Wikipedia article with one realistic single-sentence edit: content-defined chunking absorbed **93.8%** of the re-ingest from cache; fixed-size chunking (what most pipelines do today) absorbed only **28.6%** on the identical edit.
+- [VALIDATION.md](VALIDATION.md) - the **multi-model, multi-scenario** suite: correctness, RAG re-ingest, agentic loops, semantic search, and multi-tenant budgets across **4 real backends at 4 dimensions** (Ollama all-minilm/nomic-embed-text/mxbai-embed-large at 384/768/1024-dim + Gemini at 3072-dim), on this repo's own Go source and live Wikipedia. It surfaced real backend behaviors embedcache handles correctly: Gemini is not bitwise-deterministic (embedcache stabilizes it), Gemini rate-limits under burst, and small-context models reject oversized chunks - none of which are cache defects, and all documented honestly rather than hidden.
 
 | Claim | Evidence |
 |---|---|
