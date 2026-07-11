@@ -36,6 +36,7 @@
     <a href="#metrics">Metrics</a>
     <h4>Production</h4>
     <a href="#security">Security</a>
+    <a href="#budgets">Budgets</a>
     <a href="#resilience">Resilience</a>
     <a href="#persistence">Persistence &amp; TTL</a>
     <h4>Honesty</h4>
@@ -131,6 +132,9 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
       <tr><td><code>-upstream</code></td><td>required</td><td>base URL of the OpenAI-compatible backend</td></tr>
       <tr><td><code>-upstream-api-key</code></td><td>forward client's</td><td>pin one upstream key for all traffic</td></tr>
       <tr><td><code>-upstream-timeout</code></td><td><code>120s</code></td><td>per-call upstream timeout</td></tr>
+      <tr><td><code>-budget-tokens</code></td><td>off</td><td>default per-key upstream-spend budget per window</td></tr>
+      <tr><td><code>-budgets-file</code></td><td>—</td><td>JSON <code>{"key": tokensPerWindow}</code>; <code>"default"</code> overrides <code>-budget-tokens</code>, 0 = unlimited</td></tr>
+      <tr><td><code>-budget-window</code></td><td><code>24h</code></td><td>budget reset cadence</td></tr>
       <tr><td><code>-upstream-retries</code></td><td><code>2</code></td><td>extra attempts for transient failures (network, 5xx, 429); honors <code>Retry-After</code></td></tr>
       <tr><td><code>-breaker-threshold</code></td><td><code>5</code></td><td>consecutive failures before the circuit opens (0 disables)</td></tr>
       <tr><td><code>-breaker-cooldown</code></td><td><code>10s</code></td><td>open duration before a single probe is admitted</td></tr>
@@ -236,6 +240,33 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
       (Caddy, nginx, or your ingress). The request log stores raw input text; treat it
       with the same care as the documents it came from.
     </div>
+
+    <h2 id="budgets">Budgets</h2>
+    <p>Hard per-key limits on upstream spend, in tokens per window:</p>
+    <pre class="code">embedcache serve -upstream http://localhost:8000 \
+  -budgets-file budgets.json -budget-window 24h
+
+<span class="cm"># budgets.json — 0 makes a key unlimited; "default" covers everyone else</span>
+{ "team-search-x9f": 2000000, "team-agents-p7q": 500000, "default": 1000000 }</pre>
+    <p>Only tokens actually billed upstream count against a budget — cache hits and
+    coalesced items are free. Once a key's window is spent, requests that would trigger
+    new computation are rejected with <code>429</code> and a <code>Retry-After</code>
+    header pointing at the window reset.</p>
+    <div class="note">
+      <b>Budgets cap cost, not availability:</b> an exhausted key keeps getting cache
+      hits — its existing corpus and hot queries stay served while new spend is blocked.
+      A runaway agent burning its budget on novel inputs gets stopped; the production
+      queries it already warmed keep working.
+    </div>
+    <ul>
+      <li>Every response to a limited key carries <code>X-Embedcache-Budget-Remaining</code>.</li>
+      <li>Per-key state (limit, spent, reset) is on <code>/_ec/stats</code>; rejections
+      export as <code>embedcache_budget_rejects_total</code>.</li>
+      <li>A request that starts under budget may finish over it — the overshoot counts and
+      the next spend attempt is rejected. Counters are in-memory and reset at each window
+      boundary and on restart.</li>
+      <li>Anonymous callers (no key) share one budget bucket under the default limit.</li>
+    </ul>
 
     <h2 id="resilience">Resilience</h2>
     <p>Embedding calls are idempotent, so transient upstream failures (network errors, 5xx,

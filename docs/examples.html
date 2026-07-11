@@ -328,6 +328,17 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/stats \
     <p>Every team shares one cache — team A's ingestion warms team B's queries — while
     usage is attributed per key.</p>
 
+    <p>Add hard budgets so a runaway agent can't burn the shared backend:</p>
+    <pre class="code">embedcache serve -upstream http://localhost:8000 \
+  -auth-mode allowlist -api-keys-file keys.txt \
+  -budgets-file budgets.json -budget-window 24h
+
+<span class="cm"># budgets.json</span>
+{ "team-agents-p7q": 500000, "default": 2000000 }
+
+<span class="cm"># when team-agents exhausts its 500k tokens: new computation gets 429,</span>
+<span class="cm"># but everything already cached keeps serving</span></pre>
+
   </main>
 </div>
 

@@ -129,6 +129,20 @@ embedcache serve -upstream http://localhost:8000 \
 - **`-auth-mode`** - cache hits never touch the upstream, so without this a revoked or missing key can still read cached vectors. `allowlist` is for self-hosted backends (the proxy owns the key list); `verify` is for hosted providers - the caller's key is checked against the upstream (`GET /v1/models`) and the verdict cached for `-auth-cache-ttl` (default 5m, negative verdicts 1m, fail-closed on upstream outage).
 - Terminate TLS in front (Caddy, nginx, or your ingress); embedcache listens in plaintext.
 
+## Budgets
+
+Hard per-key limits on upstream spend — the enforcement half of the cost story:
+
+```bash
+embedcache serve -upstream http://localhost:8000 \
+  -budgets-file budgets.json -budget-window 24h
+
+# budgets.json — tokens per key per window; 0 = unlimited, "default" applies to the rest
+{ "team-search-x9f": 2000000, "team-agents-p7q": 500000, "default": 1000000 }
+```
+
+Budgets bound **spend, not reads**: only tokens actually billed upstream count, and once a key is exhausted, requests needing new computation get `429` (with `Retry-After` for the window reset) while **cache hits keep serving** — a capped team's existing workload stays alive; only new cost is blocked. Every response carries `X-Embedcache-Budget-Remaining` so clients can self-moderate, per-key state is on `/_ec/stats`, and rejections export as `embedcache_budget_rejects_total`. Counters are in-memory and reset at each window boundary (and on restart), like any in-process rate limiter.
+
 ## Resilience
 
 Embedding calls are idempotent, so transient upstream failures (network errors, 5xx, 429) are retried with exponential backoff - `-upstream-retries`, honoring `Retry-After`. Sustained failures trip a circuit breaker (`-breaker-threshold` consecutive failures) and requests fail fast with 503 instead of stacking timeouts on a dead backend; after `-breaker-cooldown` a single probe decides whether to close it. Cache hits keep serving while the circuit is open - an upstream outage degrades misses, not the whole service. The request log rotates at `-request-log-max-mb` so it cannot fill the disk. Breaker state, retries, and fast-fails are exported at `/metrics`.
@@ -148,6 +162,8 @@ Embedding calls are idempotent, so transient upstream failures (network errors, 
 | `-max-batch-items` | 2048 | reject oversized batches |
 | `-max-body-mb` | 64 | reject oversized bodies |
 | `-max-entries` / `-max-memory-mb` | 1M / 1024 | LRU bounds |
+| `-budget-tokens` / `-budgets-file` | off | per-key upstream-spend limits |
+| `-budget-window` | 24h | budget reset cadence |
 | `-upstream-retries` | 2 | retries for transient upstream failures |
 | `-breaker-threshold` / `-breaker-cooldown` | 5 / 10s | circuit breaker |
 | `-normalize` | off | `trim,collapse,lowercase` |
