@@ -18,6 +18,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/api"
 	"github.com/Ajay6601/embedcache/internal/auth"
 	"github.com/Ajay6601/embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/budget"
 	"github.com/Ajay6601/embedcache/internal/cache"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
 	"github.com/Ajay6601/embedcache/internal/mockllm"
@@ -482,6 +483,89 @@ func TestRequestLogRotation(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath + ".1"); err != nil {
 		t.Fatal("rotated backup missing")
+	}
+}
+
+// TestBudgetBlocksSpendNotReads is the product-defining budget behavior:
+// once a key's budget is spent, requests needing NEW upstream computation
+// get 429, but fully-cached requests keep serving — the budget caps cost,
+// not availability.
+func TestBudgetBlocksSpendNotReads(t *testing.T) {
+	s := newStack(t)
+	up, _ := upstream.New(s.mockSrv.URL, "", 0)
+	p := New(cache.New(0, 0), up, stats.New(), fingerprint.Normalizer{})
+	enforcer := budget.New(0, time.Hour)
+	enforcer.SetLimit("sk-capped", 8) // tiny: one ~7-token input exhausts it
+	enforcer.SetLimit("sk-free", 0)   // unlimited
+	p.Budget = enforcer
+	srv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	defer srv.Close()
+
+	post := func(key, input string) (*http.Response, *api.EmbeddingsResponse) {
+		b, _ := json.Marshal(map[string]any{"model": "m1", "input": input})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/embeddings", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+key)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var parsed api.EmbeddingsResponse
+		json.Unmarshal(raw, &parsed)
+		return resp, &parsed
+	}
+
+	// 1. first miss spends the budget (mock bills ~len/4 tokens)
+	r1, _ := post("sk-capped", "thirty-two characters of input!!")
+	if r1.StatusCode != 200 {
+		t.Fatalf("first request under budget must succeed: %d", r1.StatusCode)
+	}
+	if r1.Header.Get("X-Embedcache-Budget-Remaining") == "" {
+		t.Fatal("budget-limited callers must see X-Embedcache-Budget-Remaining")
+	}
+
+	// 2. new computation now rejected
+	r2, _ := post("sk-capped", "a different uncached input here")
+	if r2.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("over-budget spend must 429, got %d", r2.StatusCode)
+	}
+	if r2.Header.Get("Retry-After") == "" {
+		t.Fatal("429 must carry Retry-After")
+	}
+
+	// 3. THE claim: the already-cached input still serves
+	r3, _ := post("sk-capped", "thirty-two characters of input!!")
+	if r3.StatusCode != 200 {
+		t.Fatalf("cache hit must serve even when budget is spent, got %d", r3.StatusCode)
+	}
+	if r3.Header.Get("X-Embedcache-Status") != "hit" {
+		t.Fatalf("expected hit, got %q", r3.Header.Get("X-Embedcache-Status"))
+	}
+
+	// 4. other keys unaffected
+	r4, _ := post("sk-free", "a different uncached input here")
+	if r4.StatusCode != 200 {
+		t.Fatalf("unlimited key must be unaffected: %d", r4.StatusCode)
+	}
+
+	// 5. the rejection is counted
+	if p.Stats.Snapshot(pricing.Default(), 0, 0).BudgetRejects != 1 {
+		t.Fatal("budget rejection not recorded in stats")
+	}
+}
+
+func TestBudgetOffByDefault(t *testing.T) {
+	s := newStack(t) // no Budget set on the stack's proxy
+	for i := 0; i < 5; i++ {
+		_, r := embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": fmt.Sprintf("no budget input %d", i)})
+		if r.StatusCode != 200 {
+			t.Fatalf("nil enforcer must never reject: %d", r.StatusCode)
+		}
+		if r.Header.Get("X-Embedcache-Budget-Remaining") != "" {
+			t.Fatal("no budget header when budgets are off")
+		}
 	}
 }
 

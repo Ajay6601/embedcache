@@ -105,6 +105,7 @@ func (s *Server) snapshot() stats.Report {
 	if s.Proxy.Upstream != nil {
 		r.BreakerOpen = s.Proxy.Upstream.Breaker.State() == breaker.Open
 	}
+	r.Budgets = s.Proxy.Budget.Report()
 	return r
 }
 

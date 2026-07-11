@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ajay6601/embedcache/internal/budget"
 	"github.com/Ajay6601/embedcache/internal/pricing"
 )
 
@@ -38,8 +39,9 @@ type Collector struct {
 	UpstreamCalls uint64
 	UpstreamItems uint64
 
-	Retries   uint64 // upstream attempts beyond the first
-	FastFails uint64 // requests rejected because the circuit was open
+	Retries       uint64 // upstream attempts beyond the first
+	FastFails     uint64 // requests rejected because the circuit was open
+	BudgetRejects uint64 // requests rejected because the key's budget was spent
 
 	SavedTokens uint64
 	SpentTokens uint64
@@ -135,29 +137,37 @@ func (c *Collector) RecordFastFail() {
 	c.mu.Unlock()
 }
 
+func (c *Collector) RecordBudgetReject() {
+	c.mu.Lock()
+	c.BudgetRejects++
+	c.mu.Unlock()
+}
+
 type Report struct {
-	UptimeSeconds float64            `json:"uptime_seconds"`
-	Requests      uint64             `json:"requests"`
-	Passthrough   uint64             `json:"passthrough_requests"`
-	Errors        uint64             `json:"errors"`
-	Items         uint64             `json:"items"`
-	Hits          uint64             `json:"hits"`
-	Misses        uint64             `json:"misses"`
-	Coalesced     uint64             `json:"coalesced"`
-	HitRate       float64            `json:"hit_rate"`
-	UpstreamCalls uint64             `json:"upstream_calls"`
-	UpstreamItems uint64             `json:"upstream_items"`
-	Retries       uint64             `json:"upstream_retries"`
-	FastFails     uint64             `json:"breaker_fast_fails"`
-	BreakerOpen   bool               `json:"breaker_open"`
-	SavedTokens   uint64             `json:"saved_tokens"`
-	SpentTokens   uint64             `json:"spent_tokens"`
-	SavedUSD      float64            `json:"saved_usd"`
-	SpentUSD      float64            `json:"spent_usd"`
-	CacheEntries  int                `json:"cache_entries"`
-	CacheBytes    int64              `json:"cache_bytes"`
-	PerModel      map[string]*Bucket `json:"per_model"`
-	PerCaller     map[string]*Bucket `json:"per_caller,omitempty"`
+	UptimeSeconds float64                  `json:"uptime_seconds"`
+	Requests      uint64                   `json:"requests"`
+	Passthrough   uint64                   `json:"passthrough_requests"`
+	Errors        uint64                   `json:"errors"`
+	Items         uint64                   `json:"items"`
+	Hits          uint64                   `json:"hits"`
+	Misses        uint64                   `json:"misses"`
+	Coalesced     uint64                   `json:"coalesced"`
+	HitRate       float64                  `json:"hit_rate"`
+	UpstreamCalls uint64                   `json:"upstream_calls"`
+	UpstreamItems uint64                   `json:"upstream_items"`
+	Retries       uint64                   `json:"upstream_retries"`
+	FastFails     uint64                   `json:"breaker_fast_fails"`
+	BreakerOpen   bool                     `json:"breaker_open"`
+	BudgetRejects uint64                   `json:"budget_rejects"`
+	Budgets       map[string]budget.Status `json:"budgets,omitempty"`
+	SavedTokens   uint64                   `json:"saved_tokens"`
+	SpentTokens   uint64                   `json:"spent_tokens"`
+	SavedUSD      float64                  `json:"saved_usd"`
+	SpentUSD      float64                  `json:"spent_usd"`
+	CacheEntries  int                      `json:"cache_entries"`
+	CacheBytes    int64                    `json:"cache_bytes"`
+	PerModel      map[string]*Bucket       `json:"per_model"`
+	PerCaller     map[string]*Bucket       `json:"per_caller,omitempty"`
 }
 
 func (c *Collector) Snapshot(table *pricing.Table, cacheEntries int, cacheBytes int64) Report {
@@ -176,6 +186,7 @@ func (c *Collector) Snapshot(table *pricing.Table, cacheEntries int, cacheBytes 
 		UpstreamItems: c.UpstreamItems,
 		Retries:       c.Retries,
 		FastFails:     c.FastFails,
+		BudgetRejects: c.BudgetRejects,
 		SavedTokens:   c.SavedTokens,
 		SpentTokens:   c.SpentTokens,
 		CacheEntries:  cacheEntries,
@@ -215,6 +226,23 @@ func (r Report) RenderText(w io.Writer) {
 		}
 		fmt.Fprintf(w, "circuit breaker        %s   (%d requests failed fast)\n", state, r.FastFails)
 	}
+	if r.BudgetRejects > 0 || len(r.Budgets) > 0 {
+		fmt.Fprintf(w, "budget rejections      %d\n", r.BudgetRejects)
+		keys := make([]string, 0, len(r.Budgets))
+		for k := range r.Budgets {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			b := r.Budgets[k]
+			if b.Remaining < 0 {
+				fmt.Fprintf(w, "  key %s          unlimited (spent %d this window)\n", k, b.Spent)
+				continue
+			}
+			fmt.Fprintf(w, "  key %s          %d / %d tokens spent, resets in %s\n",
+				k, b.Spent, b.Limit, time.Duration(b.ResetsInSecond)*time.Second)
+		}
+	}
 	fmt.Fprintf(w, "hit rate               %.1f%%\n", r.HitRate*100)
 	fmt.Fprintf(w, "tokens paid upstream   %d   ($%.4f)\n", r.SpentTokens, r.SpentUSD)
 	fmt.Fprintf(w, "tokens saved           %d   ($%.4f)\n", r.SavedTokens, r.SavedUSD)
@@ -249,6 +277,7 @@ func (r Report) RenderPrometheus(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE embedcache_upstream_calls_total counter\nembedcache_upstream_calls_total %d\n", r.UpstreamCalls)
 	fmt.Fprintf(w, "# TYPE embedcache_upstream_retries_total counter\nembedcache_upstream_retries_total %d\n", r.Retries)
 	fmt.Fprintf(w, "# TYPE embedcache_breaker_fast_fails_total counter\nembedcache_breaker_fast_fails_total %d\n", r.FastFails)
+	fmt.Fprintf(w, "# TYPE embedcache_budget_rejects_total counter\nembedcache_budget_rejects_total %d\n", r.BudgetRejects)
 	open := 0
 	if r.BreakerOpen {
 		open = 1

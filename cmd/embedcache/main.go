@@ -19,6 +19,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/analyze"
 	"github.com/Ajay6601/embedcache/internal/auth"
 	"github.com/Ajay6601/embedcache/internal/breaker"
+	"github.com/Ajay6601/embedcache/internal/budget"
 	"github.com/Ajay6601/embedcache/internal/cache"
 	"github.com/Ajay6601/embedcache/internal/chunker"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
@@ -96,6 +97,9 @@ func runServe(args []string) error {
 	cacheTTL := fs.Duration("ttl", 0, "expire cached embeddings after this duration (0 = never; use when model weights change under the same name)")
 	maxBatch := fs.Int("max-batch-items", 2048, "reject batches with more items than this (0 = unlimited)")
 	maxBodyMB := fs.Int64("max-body-mb", 64, "reject request bodies larger than this")
+	budgetTokens := fs.Int64("budget-tokens", 0, "default per-key upstream token budget per window; once spent, requests needing new computation get 429 while cache hits keep serving (0 = no budgets)")
+	budgetsFile := fs.String("budgets-file", "", "JSON file of {\"<api key>\": tokensPerWindow}; key \"default\" overrides -budget-tokens, 0 makes a key unlimited")
+	budgetWindow := fs.Duration("budget-window", 24*time.Hour, "budget window; spend counters reset at each window boundary (and on restart)")
 	retries := fs.Int("upstream-retries", 2, "extra attempts for transient upstream failures (network errors, 5xx, 429)")
 	breakerThreshold := fs.Int("breaker-threshold", 5, "consecutive upstream failures before the circuit opens (0 = disabled)")
 	breakerCooldown := fs.Duration("breaker-cooldown", 10*time.Second, "how long the circuit stays open before probing the upstream")
@@ -159,6 +163,34 @@ func runServe(args []string) error {
 	}
 	if auth.Mode(*authMode) == auth.ModeOff {
 		log.Printf("warning: cache hits are served without key validation (-auth-mode off); use allowlist or verify for untrusted callers")
+	}
+
+	if *budgetTokens > 0 || *budgetsFile != "" {
+		defLimit := *budgetTokens
+		perKey := map[string]int64{}
+		if *budgetsFile != "" {
+			b, err := os.ReadFile(*budgetsFile)
+			if err != nil {
+				return fmt.Errorf("reading budgets file: %w", err)
+			}
+			var m map[string]int64
+			if err := json.Unmarshal(b, &m); err != nil {
+				return fmt.Errorf("parsing budgets file: %w", err)
+			}
+			for k, v := range m {
+				if strings.EqualFold(k, "default") {
+					defLimit = v
+				} else {
+					perKey[k] = v
+				}
+			}
+		}
+		enforcer := budget.New(defLimit, *budgetWindow)
+		for k, v := range perKey {
+			enforcer.SetLimit(k, v)
+		}
+		p.Budget = enforcer
+		log.Printf("budget enforcement on: window=%s default=%d tokens, %d per-key limits", *budgetWindow, defLimit, len(perKey))
 	}
 
 	up.OnRetry = st.RecordRetry

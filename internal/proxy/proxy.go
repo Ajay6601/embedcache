@@ -19,11 +19,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Ajay6601/embedcache/internal/api"
 	"github.com/Ajay6601/embedcache/internal/auth"
+	"github.com/Ajay6601/embedcache/internal/budget"
 	"github.com/Ajay6601/embedcache/internal/cache"
 	"github.com/Ajay6601/embedcache/internal/coalesce"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
@@ -43,6 +45,8 @@ type Proxy struct {
 
 	// Auth validates client keys before any cache read; nil means off.
 	Auth *auth.Authorizer
+	// Budget enforces per-key limits on upstream spend; nil means off.
+	Budget *budget.Enforcer
 	// CacheTTL bounds how long an entry may be served; 0 = forever.
 	CacheTTL time.Duration
 	// MaxBatchItems rejects oversized batches; 0 = unlimited.
@@ -192,6 +196,20 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 		respModel                      = req.Model
 	)
 
+	// Budgets bound upstream SPEND, not reads: a fully-cached request is
+	// served even when the caller's budget is exhausted. Only requests that
+	// need new computation are rejected — the cache keeps a capped tenant's
+	// existing workload alive while blocking new cost.
+	if len(uniqueMissing) > 0 {
+		if ok, retryAfter := p.Budget.Allow(credential); !ok {
+			p.Stats.RecordBudgetReject()
+			w.Header().Set("Retry-After", fmt.Sprint(int(retryAfter.Seconds())+1))
+			writeError(w, http.StatusTooManyRequests,
+				fmt.Sprintf("token budget exhausted for this key; window resets in %s", retryAfter.Round(time.Second)))
+			return
+		}
+	}
+
 	if len(uniqueMissing) > 0 {
 		owned, waits := p.Group.Claim(uniqueMissing)
 
@@ -272,6 +290,7 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 					savedTokens += extra * e.Tokens
 				}
 			}
+			p.Budget.Record(credential, spentTokens)
 		}
 
 		for k, call := range waits {
@@ -321,6 +340,9 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Embedcache-Coalesced", fmt.Sprint(coalesced))
 	h.Set("X-Embedcache-Saved-Tokens", fmt.Sprint(savedTokens))
 	h.Set("X-Embedcache-Status", cacheStatus(hits, misses, coalesced))
+	if rem, limited := p.Budget.Remaining(credential); limited {
+		h.Set("X-Embedcache-Budget-Remaining", fmt.Sprint(rem))
+	}
 	json.NewEncoder(w).Encode(out)
 }
 
@@ -335,11 +357,17 @@ func cacheStatus(hits, misses, coalesced int) string {
 	}
 }
 
-func callerHash(auth string) string {
-	if auth == "" {
+// callerHash normalizes a credential to a short display hash. The Bearer
+// prefix is stripped so the same key hashes identically however it arrives,
+// and so per-caller stats line up with the budget report's key hashes.
+func callerHash(credential string) string {
+	if credential == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(auth))
+	if t, ok := strings.CutPrefix(credential, "Bearer "); ok {
+		credential = t
+	}
+	sum := sha256.Sum256([]byte(credential))
 	return hex.EncodeToString(sum[:4])
 }
 
