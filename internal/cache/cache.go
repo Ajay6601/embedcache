@@ -23,7 +23,7 @@ type Entry struct {
 const shardCount = 16
 
 type Cache struct {
-	shards            [shardCount]*shard
+	shards             [shardCount]*shard
 	maxEntriesPerShard int
 	maxBytesPerShard   int64
 }
