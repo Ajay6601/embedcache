@@ -6,3 +6,4 @@ e5-requests.jsonl
 /experiments/benchmark/data/scifact.zip
 /experiments/benchmark/data/scifact/
 /dist/
+__pycache__/
