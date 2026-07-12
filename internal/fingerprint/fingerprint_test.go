@@ -9,6 +9,32 @@ import (
 
 func text(s string) api.InputItem { return api.InputItem{Text: s} }
 
+func TestNFCFoldsDecomposedForm(t *testing.T) {
+	nfc := "café"  // café with precomposed é (U+00E9)
+	nfd := "café" // café with e + combining acute (U+0301)
+	if nfc == nfd {
+		t.Fatal("test inputs should be different byte sequences")
+	}
+	norm := Normalizer{NFC: true}
+	// without folding, they are different keys (the leak validation found)
+	if Key("m", 0, "", "", text(nfc), Normalizer{}) == Key("m", 0, "", "", text(nfd), Normalizer{}) {
+		t.Fatal("byte-exact mode should keep NFC and NFD distinct")
+	}
+	// with nfc folding, they share a key
+	if Key("m", 0, "", "", text(nfc), norm) != Key("m", 0, "", "", text(nfd), norm) {
+		t.Error("nfc normalization should fold NFC and NFD to one key")
+	}
+	// and folding a value that is already NFC is a no-op
+	if foldNFC(nfc) != nfc {
+		t.Error("already-composed text must pass through unchanged")
+	}
+	// unrelated combining sequences we don't cover pass through, never wrong
+	other := "a̰" // a + combining tilde below (not in the Latin table)
+	if foldNFC(other) != other {
+		t.Error("uncovered combining sequences must pass through unchanged")
+	}
+}
+
 func TestKeyDeterministic(t *testing.T) {
 	a := Key("m", 0, "", "", text("hello"), Normalizer{})
 	b := Key("m", 0, "", "", text("hello"), Normalizer{})

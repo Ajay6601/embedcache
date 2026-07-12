@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -78,5 +79,37 @@ func TestNormalizationWidensMatching(t *testing.T) {
 	norm, _ := Run(strings.NewReader(log), Options{Norm: fingerprint.Normalizer{TrimSpace: true, CollapseWhitespace: true}})
 	if norm.DupItems != 1 {
 		t.Fatal("trim+collapse must match differently-spaced text")
+	}
+}
+
+// TestLogAdapters runs the analyzer against real sample logs in the shapes
+// common tools emit, proving it finds embedding requests without per-vendor
+// glue: LiteLLM proxy logs (request under kwargs), OpenAI SDK dumps (request as
+// a JSON string under json_data), and a plain access log (request under body).
+func TestLogAdapters(t *testing.T) {
+	cases := []struct {
+		file             string
+		requests, items  int
+		unique, dupItems int
+	}{
+		{"testdata/litellm.jsonl", 3, 4, 3, 1},
+		{"testdata/openai-sdk.jsonl", 2, 2, 1, 1},
+		{"testdata/plain-access.jsonl", 2, 5, 3, 2},
+	}
+	for _, c := range cases {
+		f, err := os.Open(c.file)
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		res, err := Run(f, Options{})
+		f.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		if res.Requests != c.requests || res.Items != c.items || res.Unique != c.unique || res.DupItems != c.dupItems {
+			t.Errorf("%s: requests=%d items=%d unique=%d dup=%d; want %d/%d/%d/%d",
+				c.file, res.Requests, res.Items, res.Unique, res.DupItems,
+				c.requests, c.items, c.unique, c.dupItems)
+		}
 	}
 }

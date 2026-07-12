@@ -237,6 +237,35 @@ embedcache serve -upstream http://localhost:8000 \
 
 Budgets bound **spend, not reads**: only tokens actually billed upstream count, and once a key is exhausted, requests needing new computation get `429` (with `Retry-After` for the window reset) while **cache hits keep serving**, so a capped team's existing workload stays alive; only new cost is blocked. Every response carries `X-Embedcache-Budget-Remaining` so clients can self-moderate, per-key state is on `/_ec/stats`, and rejections export as `embedcache_budget_rejects_total`. Counters are in-memory and reset at each window boundary (and on restart), like any in-process rate limiter.
 
+## Scaling: shared cache across instances
+
+A single instance keeps its cache in memory, so the moment you run more than one replica behind a load balancer each starts cold and the fleet recomputes the same vectors. Point them all at one Redis (or Valkey) and they share entries:
+
+```bash
+embedcache serve -upstream http://localhost:8000 \
+  -shared-redis 127.0.0.1:6379 -shared-redis-ttl 720h
+```
+
+On a local miss the proxy consults Redis before going upstream; a hit there warms the local cache and skips the backend call, byte-identically. The Redis client is a small in-house RESP implementation, so this stays a single dependency-free static binary. Proven for real in [SHAREDCACHE.md](SHAREDCACHE.md): two separate processes sharing one Redis, where the second serves the first's vector with **no upstream call**. (The tier is read-through/write-through and best-effort — if Redis is unreachable, instances fall back to computing, never erroring.)
+
+## Semantic (near-duplicate) caching, shadow-first
+
+Exact-match caching caps savings at your literal duplicate share. Near-duplicate matching — "how do I reset my password" vs "how do I reset my password?" — can push higher, but serving one input's vector for another can silently poison a vector store, so it is **off by default and shadow-first**:
+
+```bash
+# 1. measure only: find near-duplicates and record how far their cached vector
+#    is from the real one, serving nothing approximate
+embedcache serve -upstream http://localhost:8000 -semantic shadow -semantic-threshold 0.9
+
+# the waste report then shows, e.g.:
+#   semantic shadow   1240 near-neighbors measured; real-vs-neighbor cosine mean 0.991, worst 0.955
+
+# 2. only if those cosine deltas are acceptable on YOUR data, turn it on
+embedcache serve -upstream http://localhost:8000 -semantic active -semantic-threshold 0.93
+```
+
+The similarity signal is character-trigram Jaccard over the input text (cheap, no extra model — computing an embedding to detect a duplicate would defeat the purpose). In `active` mode a match above the threshold is served an existing neighbor's vector (an `X-Embedcache-Semantic-Hits` header marks it); in `shadow` mode nothing about serving changes and only the cosine deltas are recorded. This is the one feature that trades exactness for hit rate, so it stays opt-in with the shadow gate in front of it.
+
 ## Resilience
 
 Embedding calls are idempotent, so transient upstream failures (network errors, 5xx, 429) are retried with exponential backoff - `-upstream-retries`, honoring `Retry-After`. Sustained failures trip a circuit breaker (`-breaker-threshold` consecutive failures) and requests fail fast with 503 instead of stacking timeouts on a dead backend; after `-breaker-cooldown` a single probe decides whether to close it. Cache hits keep serving while the circuit is open - an upstream outage degrades misses, not the whole service. The request log rotates at `-request-log-max-mb` so it cannot fill the disk. Breaker state, retries, and fast-fails are exported at `/metrics`.
@@ -258,9 +287,13 @@ Embedding calls are idempotent, so transient upstream failures (network errors, 
 | `-max-entries` / `-max-memory-mb` | 1M / 1024 | LRU bounds |
 | `-budget-tokens` / `-budgets-file` | off | per-key upstream-spend limits |
 | `-budget-window` | 24h | budget reset cadence |
+| `-shared-redis` | off | Redis/Valkey host:port for a shared cache tier across instances |
+| `-shared-redis-ttl` / `-shared-redis-prefix` | 0 / `ec:` | shared entry expiry and key namespace |
+| `-semantic` | off | near-duplicate matching: `shadow` (measure only) or `active` |
+| `-semantic-threshold` | 0.9 | trigram-Jaccard similarity to treat inputs as near-duplicates |
 | `-upstream-retries` | 2 | retries for transient upstream failures |
 | `-breaker-threshold` / `-breaker-cooldown` | 5 / 10s | circuit breaker |
-| `-normalize` | off | `trim,collapse,lowercase` |
+| `-normalize` | off | `trim,collapse,lowercase,nfc` |
 | `-persist` | off | snapshot file; survives restarts |
 | `-request-log` | off | JSONL log, feeds `analyze` |
 | `-request-log-max-mb` | 512 | rotate the request log at this size |
@@ -287,7 +320,7 @@ embedcache serve \
 
 - Terminate TLS in front (Caddy / nginx / ingress); embedcache listens in plaintext.
 - Scrape `/metrics` with Prometheus; alert on `embedcache_breaker_open == 1` (backend down) and a falling `hit_rate` (workload shifted - rerun `analyze`).
-- One instance sustains ~39k cache-hit req/s; the cache is per-instance (shared/distributed cache is on the roadmap).
+- One instance sustains ~39k cache-hit req/s; for multiple replicas add `-shared-redis` so they share one cache instead of each starting cold.
 - See [Examples](https://ajay6601.github.io/embedcache/examples.html) for Docker Compose, Kubernetes, and systemd units.
 
 ## Chunk-diff engine
@@ -311,12 +344,16 @@ Proven on one real, live Wikipedia article with one realistic single-sentence ed
 - **Multi-model validation** across six real backends, plus multilingual (en/zh/hi/ar/es), long-context, and Unicode-normalization coverage.
 - **Recognized-benchmark proof** - zero retrieval-quality loss on BEIR SciFact, honest open-loop latency, and a real multi-agent + Python/LangChain cross-language test.
 - **Onboarding + release** - `embedcache demo` / `embedcache check`, and cross-platform prebuilt binaries + a GHCR Docker image on every tag.
+- **Shared cache across instances** - `-shared-redis` so a fleet shares one cache instead of each replica starting cold ([SHAREDCACHE.md](SHAREDCACHE.md)).
+- **Semantic (near-duplicate) caching** - opt-in, shadow-first: measure real-vs-neighbor cosine deltas before ever serving an approximate vector.
+- **Two validation fixes** - `-normalize nfc` folds the NFC/NFD duplicate leak; the token estimator now counts CJK/wide scripts per-character instead of per-byte.
+- **`analyze` log adapters** - reads LiteLLM, OpenAI-SDK, and plain access logs, not just its own JSONL.
 
 ## Roadmap
 
-1. **Distributed / shared cache** - a Redis-backed tier so instances share entries (currently per-instance).
-2. **Multimodal image embeddings** - live end-to-end test against a Voyage multimodal backend (cache is already content-agnostic).
-3. **Unicode normalization option** - fold NFC/NFD (validation found the same visible text in different normalization forms caches as two entries); opt-in, since it changes match semantics.
+1. **Multimodal image embeddings** - live end-to-end test against a Voyage multimodal backend (cache is already content-agnostic).
+2. **Full Unicode NFC** - the current `-normalize nfc` folds common Latin combining sequences without a dependency; full Unicode normalization would need `golang.org/x/text`.
+3. **Priced dollar case study** - a real hosted-API run turning the token-percentage savings into invoice dollars.
 4. **Request-log PII redaction** - opt-in hash-only logging for privacy-sensitive shops.
 
 ## Development
@@ -329,6 +366,7 @@ go run ./experiments/validate   -bin ./embedcache.exe  # regenerates VALIDATION.
 go run ./experiments/benchmark  -bin ./embedcache.exe  # regenerates BENCHMARKS.md (needs the BEIR SciFact dataset, see experiments/benchmark/data/README.md)
 go run ./experiments/perf       -bin ./embedcache.exe  # regenerates PERF.md
 go run ./experiments/multiagent -bin ./embedcache.exe  # regenerates MULTIAGENT.md (needs Ollama + python with langchain_core)
+go run ./experiments/sharedcache -bin ./embedcache.exe  # regenerates SHAREDCACHE.md (needs a local Redis/Valkey)
 ```
 
 The experiments harness starts the real binary against a deterministic mock upstream and fails the build if any correctness, coalescing, overhead, or savings assertion regresses. The other harnesses run against real local backends and real data (this repo's own source, live Wikipedia, the public BEIR dataset) and are re-runnable on any machine with the same models pulled.

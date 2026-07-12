@@ -23,6 +23,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
 	"github.com/Ajay6601/embedcache/internal/mockllm"
 	"github.com/Ajay6601/embedcache/internal/pricing"
+	"github.com/Ajay6601/embedcache/internal/semantic"
 	"github.com/Ajay6601/embedcache/internal/stats"
 	"github.com/Ajay6601/embedcache/internal/upstream"
 )
@@ -586,5 +587,88 @@ func TestBadRequests(t *testing.T) {
 		if resp.StatusCode != 400 {
 			t.Errorf("%s: status = %d, want 400", name, resp.StatusCode)
 		}
+	}
+}
+
+func newSemanticStack(t *testing.T, mode string, threshold float64) *stack {
+	t.Helper()
+	mock := mockllm.New(32)
+	mockSrv := httptest.NewServer(mock.Handler())
+	t.Cleanup(mockSrv.Close)
+	up, err := upstream.New(mockSrv.URL, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := stats.New()
+	p := New(cache.New(0, 0), up, st, fingerprint.Normalizer{})
+	p.Semantic = semantic.New(0)
+	p.SemanticMode = mode
+	p.SemanticThreshold = threshold
+	proxySrv := httptest.NewServer(http.HandlerFunc(p.ServeEmbeddings))
+	t.Cleanup(proxySrv.Close)
+	return &stack{mock: mock, mockSrv: mockSrv, proxySrv: proxySrv, collector: st}
+}
+
+// TestSemanticActiveServesNeighbor: in active mode a near-duplicate input is
+// served an existing neighbor's cached vector instead of being computed.
+func TestSemanticActiveServesNeighbor(t *testing.T) {
+	s := newSemanticStack(t, "active", 0.7)
+	a := "how do I reset my password"
+	b := "how do I reset my password?" // near-duplicate of a
+
+	first, _ := embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": a})
+	got, resp := embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": b})
+
+	if h := resp.Header.Get("X-Embedcache-Semantic-Hits"); h != "1" {
+		t.Fatalf("expected 1 semantic hit, header=%q", h)
+	}
+	if resp.Header.Get("X-Embedcache-Status") != "hit" {
+		t.Fatalf("near-duplicate should be a hit, got %q", resp.Header.Get("X-Embedcache-Status"))
+	}
+	if !bytes.Equal(got.Data[0].Embedding, first.Data[0].Embedding) {
+		t.Fatal("active mode must serve the neighbor's vector")
+	}
+	if s.mock.CountFor(b) != 0 {
+		t.Fatalf("the near-duplicate must not be computed upstream, count=%d", s.mock.CountFor(b))
+	}
+}
+
+// TestSemanticShadowMeasuresButServesReal: in shadow mode nothing about serving
+// changes — the near-duplicate is still computed for real — but a shadow sample
+// is recorded so the operator can judge whether active mode would be safe.
+func TestSemanticShadowMeasuresButServesReal(t *testing.T) {
+	s := newSemanticStack(t, "shadow", 0.7)
+	a := "how do I reset my password"
+	b := "how do I reset my password?"
+
+	embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": a})
+	truthB := direct(t, s, map[string]any{"model": "m1", "input": b})
+	got, resp := embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": b})
+
+	if resp.Header.Get("X-Embedcache-Status") != "miss" {
+		t.Fatalf("shadow mode must still compute the input, status=%q", resp.Header.Get("X-Embedcache-Status"))
+	}
+	if resp.Header.Get("X-Embedcache-Semantic-Hits") != "" {
+		t.Fatal("shadow mode must not serve any semantic hit")
+	}
+	if !bytes.Equal(got.Data[0].Embedding, truthB.Data[0].Embedding) {
+		t.Fatal("shadow mode must serve the real computed vector, not the neighbor's")
+	}
+	rep := s.collector.Snapshot(pricing.Default(), 0, 0)
+	if rep.ShadowSamples != 1 {
+		t.Fatalf("expected 1 shadow sample, got %d", rep.ShadowSamples)
+	}
+	if rep.ShadowMeanCos == 0 {
+		t.Error("shadow mean cosine should be recorded")
+	}
+}
+
+// TestSemanticOffUnaffected: with semantic off, a near-duplicate is a normal miss.
+func TestSemanticOffUnaffected(t *testing.T) {
+	s := newStack(t)
+	embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": "how do I reset my password"})
+	_, resp := embed(t, s.proxySrv.URL, map[string]any{"model": "m1", "input": "how do I reset my password?"})
+	if resp.Header.Get("X-Embedcache-Status") != "miss" {
+		t.Fatal("without semantic caching a near-duplicate is a fresh miss")
 	}
 }

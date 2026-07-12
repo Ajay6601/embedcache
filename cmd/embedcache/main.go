@@ -28,6 +28,8 @@ import (
 	"github.com/Ajay6601/embedcache/internal/mockllm"
 	"github.com/Ajay6601/embedcache/internal/pricing"
 	"github.com/Ajay6601/embedcache/internal/proxy"
+	"github.com/Ajay6601/embedcache/internal/rediscache"
+	"github.com/Ajay6601/embedcache/internal/semantic"
 	"github.com/Ajay6601/embedcache/internal/server"
 	"github.com/Ajay6601/embedcache/internal/stats"
 	"github.com/Ajay6601/embedcache/internal/upstream"
@@ -95,7 +97,7 @@ func runServe(args []string) error {
 	upstreamTimeout := fs.Duration("upstream-timeout", 120*time.Second, "upstream request timeout")
 	maxEntries := fs.Int("max-entries", 1_000_000, "max cached embeddings (0 = unlimited)")
 	maxMemoryMB := fs.Int64("max-memory-mb", 1024, "max cache payload size in MB (0 = unlimited)")
-	normalize := fs.String("normalize", "", "opt-in input normalization before matching: comma-separated trim,collapse,lowercase (default: byte-exact)")
+	normalize := fs.String("normalize", "", "opt-in input normalization before matching: comma-separated trim,collapse,lowercase,nfc (default: byte-exact)")
 	persist := fs.String("persist", "", "path to a cache snapshot file; loaded at start, saved on shutdown and every persist-interval")
 	persistInterval := fs.Duration("persist-interval", 5*time.Minute, "how often to snapshot the cache when -persist is set")
 	pricingFile := fs.String("pricing", "", "JSON file of {\"model\": dollarsPerMillionTokens}; key \"default\" sets the fallback price")
@@ -115,6 +117,14 @@ func runServe(args []string) error {
 	breakerThreshold := fs.Int("breaker-threshold", 5, "consecutive upstream failures before the circuit opens (0 = disabled)")
 	breakerCooldown := fs.Duration("breaker-cooldown", 10*time.Second, "how long the circuit stays open before probing the upstream")
 	requestLogMaxMB := fs.Int64("request-log-max-mb", 512, "rotate the request log when it reaches this size (one .1 backup kept)")
+	sharedRedis := fs.String("shared-redis", "", "host:port of a Redis/Valkey to use as a shared cache tier so instances share entries (empty = in-memory only)")
+	sharedRedisPassword := fs.String("shared-redis-password", "", "password for -shared-redis (or set EMBEDCACHE_REDIS_PASSWORD)")
+	sharedRedisDB := fs.Int("shared-redis-db", 0, "logical Redis db for -shared-redis")
+	sharedRedisPrefix := fs.String("shared-redis-prefix", "ec:", "key prefix for shared cache entries")
+	sharedRedisTTL := fs.Duration("shared-redis-ttl", 0, "expiry for shared cache entries (0 = no expiry)")
+	semanticMode := fs.String("semantic", "off", "near-duplicate matching: off | shadow (measure only, serves nothing approximate) | active (serve a neighbor's vector above -semantic-threshold)")
+	semanticThreshold := fs.Float64("semantic-threshold", 0.9, "text (trigram Jaccard) similarity in [0,1] above which two inputs are treated as near-duplicates")
+	semanticMaxKeys := fs.Int("semantic-max-keys", 500_000, "max inputs kept in the near-duplicate index (0 = unbounded)")
 	fs.Parse(args)
 
 	if *upstreamURL == "" {
@@ -147,12 +157,45 @@ func runServe(args []string) error {
 			log.Printf("loaded %d cached embeddings from %s", n, *persist)
 		}
 	}
+	if *sharedRedis != "" {
+		pw := *sharedRedisPassword
+		if pw == "" {
+			pw = os.Getenv("EMBEDCACHE_REDIS_PASSWORD")
+		}
+		shared, err := rediscache.New(rediscache.Options{
+			Addr:     *sharedRedis,
+			Password: pw,
+			DB:       *sharedRedisDB,
+			Prefix:   *sharedRedisPrefix,
+			TTL:      *sharedRedisTTL,
+		})
+		if err != nil {
+			return fmt.Errorf("connecting to shared Redis at %s: %w", *sharedRedis, err)
+		}
+		c.SetShared(shared)
+		log.Printf("shared cache tier: Redis at %s (db %d, prefix %q, ttl %s)", *sharedRedis, *sharedRedisDB, *sharedRedisPrefix, *sharedRedisTTL)
+	}
 
 	st := stats.New()
 	p := proxy.New(c, up, st, norm)
 	p.CacheTTL = *cacheTTL
 	p.MaxBatchItems = *maxBatch
 	p.MaxBody = *maxBodyMB << 20
+
+	switch *semanticMode {
+	case "off":
+	case "shadow", "active":
+		p.Semantic = semantic.New(*semanticMaxKeys)
+		p.SemanticMode = *semanticMode
+		p.SemanticThreshold = *semanticThreshold
+		if *semanticMode == "active" {
+			log.Printf("warning: semantic caching is ACTIVE (threshold %.2f) — near-duplicate inputs are served an existing vector instead of being computed; run -semantic shadow first to confirm the cosine deltas are acceptable on your data", *semanticThreshold)
+		} else {
+			log.Printf("semantic caching in shadow mode (threshold %.2f): measuring near-neighbor cosine deltas, serving nothing approximate", *semanticThreshold)
+		}
+	default:
+		return fmt.Errorf("-semantic must be off, shadow, or active (got %q)", *semanticMode)
+	}
 
 	if auth.Mode(*authMode) != auth.ModeOff {
 		keys := splitKeys(*apiKeys)

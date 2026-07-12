@@ -43,6 +43,11 @@ type Collector struct {
 	FastFails     uint64 // requests rejected because the circuit was open
 	BudgetRejects uint64 // requests rejected because the key's budget was spent
 
+	SemanticHits uint64  // near-duplicate cache hits served (active mode)
+	ShadowN      uint64  // shadow-mode near-neighbor comparisons made
+	ShadowCosSum float64 // sum of real-vs-neighbor cosine, for the mean
+	ShadowCosMin float64 // worst (lowest) cosine observed
+
 	SavedTokens uint64
 	SpentTokens uint64
 
@@ -64,6 +69,7 @@ type RequestRecord struct {
 	Hits          int
 	Misses        int
 	Coalesced     int
+	SemanticHits  int // near-duplicate hits served in active mode
 	SavedTokens   int
 	SpentTokens   int
 	UpstreamCalls int
@@ -74,11 +80,12 @@ func (c *Collector) Record(r RequestRecord) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Requests++
-	items := uint64(r.Hits + r.Misses + r.Coalesced)
+	items := uint64(r.Hits + r.Misses + r.Coalesced + r.SemanticHits)
 	c.Items += items
-	c.Hits += uint64(r.Hits)
+	c.Hits += uint64(r.Hits + r.SemanticHits)
 	c.Misses += uint64(r.Misses)
 	c.Coalesced += uint64(r.Coalesced)
+	c.SemanticHits += uint64(r.SemanticHits)
 	c.UpstreamCalls += uint64(r.UpstreamCalls)
 	c.UpstreamItems += uint64(r.UpstreamItems)
 	c.SavedTokens += uint64(r.SavedTokens)
@@ -91,11 +98,25 @@ func (c *Collector) Record(r RequestRecord) {
 			continue
 		}
 		b.Items += items
-		b.Hits += uint64(r.Hits + r.Coalesced)
+		b.Hits += uint64(r.Hits + r.Coalesced + r.SemanticHits)
 		b.Misses += uint64(r.Misses)
 		b.SavedTokens += uint64(r.SavedTokens)
 		b.SpentTokens += uint64(r.SpentTokens)
 	}
+}
+
+// RecordSemanticShadow logs one shadow-mode observation: a near neighbor was
+// found (text similarity sim) and, had it been served, its cached vector would
+// have been this cosine-similar to the real one. Nothing was served — this is
+// how you decide whether active semantic caching is safe on your data.
+func (c *Collector) RecordSemanticShadow(sim, cosine float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ShadowN == 0 || cosine < c.ShadowCosMin {
+		c.ShadowCosMin = cosine
+	}
+	c.ShadowN++
+	c.ShadowCosSum += cosine
 }
 
 func (c *Collector) bucket(m map[string]*Bucket, key string) *Bucket {
@@ -160,6 +181,10 @@ type Report struct {
 	BreakerOpen   bool                     `json:"breaker_open"`
 	BudgetRejects uint64                   `json:"budget_rejects"`
 	Budgets       map[string]budget.Status `json:"budgets,omitempty"`
+	SemanticHits  uint64                   `json:"semantic_hits"`
+	ShadowSamples uint64                   `json:"semantic_shadow_samples"`
+	ShadowMeanCos float64                  `json:"semantic_shadow_mean_cosine"`
+	ShadowMinCos  float64                  `json:"semantic_shadow_min_cosine"`
 	SavedTokens   uint64                   `json:"saved_tokens"`
 	SpentTokens   uint64                   `json:"spent_tokens"`
 	SavedUSD      float64                  `json:"saved_usd"`
@@ -187,6 +212,9 @@ func (c *Collector) Snapshot(table *pricing.Table, cacheEntries int, cacheBytes 
 		Retries:       c.Retries,
 		FastFails:     c.FastFails,
 		BudgetRejects: c.BudgetRejects,
+		SemanticHits:  c.SemanticHits,
+		ShadowSamples: c.ShadowN,
+		ShadowMinCos:  c.ShadowCosMin,
 		SavedTokens:   c.SavedTokens,
 		SpentTokens:   c.SpentTokens,
 		CacheEntries:  cacheEntries,
@@ -196,6 +224,9 @@ func (c *Collector) Snapshot(table *pricing.Table, cacheEntries int, cacheBytes 
 	}
 	if r.Items > 0 {
 		r.HitRate = float64(c.Hits+c.Coalesced) / float64(r.Items)
+	}
+	if c.ShadowN > 0 {
+		r.ShadowMeanCos = c.ShadowCosSum / float64(c.ShadowN)
 	}
 	for k, b := range c.perModel {
 		cp := *b
@@ -242,6 +273,13 @@ func (r Report) RenderText(w io.Writer) {
 			fmt.Fprintf(w, "  key %s          %d / %d tokens spent, resets in %s\n",
 				k, b.Spent, b.Limit, time.Duration(b.ResetsInSecond)*time.Second)
 		}
+	}
+	if r.SemanticHits > 0 {
+		fmt.Fprintf(w, "  semantic (near-dup)  %d\n", r.SemanticHits)
+	}
+	if r.ShadowSamples > 0 {
+		fmt.Fprintf(w, "semantic shadow        %d near-neighbors measured; real-vs-neighbor cosine mean %.4f, worst %.4f\n",
+			r.ShadowSamples, r.ShadowMeanCos, r.ShadowMinCos)
 	}
 	fmt.Fprintf(w, "hit rate               %.1f%%\n", r.HitRate*100)
 	fmt.Fprintf(w, "tokens paid upstream   %d   ($%.4f)\n", r.SpentTokens, r.SpentUSD)

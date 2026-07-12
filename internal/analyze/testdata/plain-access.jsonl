@@ -1,0 +1,2 @@
+{"time":"2026-07-12T10:00:00Z","method":"POST","path":"/v1/embeddings","status":200,"body":{"model":"all-minilm","input":["a","b","a"]}}
+{"time":"2026-07-12T10:00:03Z","method":"POST","path":"/v1/embeddings","status":200,"body":{"model":"all-minilm","input":["a","c"]}}

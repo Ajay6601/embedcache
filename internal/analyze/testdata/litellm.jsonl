@@ -1,0 +1,4 @@
+{"level":"info","logger":"litellm","event":"success","model":"text-embedding-3-small","kwargs":{"model":"text-embedding-3-small","input":"how do I reset my password"},"response_cost":0.0000012}
+{"level":"info","logger":"litellm","event":"success","model":"text-embedding-3-small","kwargs":{"model":"text-embedding-3-small","input":"how do I reset my password"},"response_cost":0.0000012}
+{"level":"info","logger":"litellm","event":"success","model":"text-embedding-3-small","kwargs":{"model":"text-embedding-3-small","input":["pricing plans","cancel my subscription"]},"response_cost":0.0000021}
+{"level":"info","logger":"litellm","event":"start","note":"no request here, should be skipped"}

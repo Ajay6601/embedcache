@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/cache"
 	"github.com/Ajay6601/embedcache/internal/coalesce"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/semantic"
 	"github.com/Ajay6601/embedcache/internal/stats"
 	"github.com/Ajay6601/embedcache/internal/tokens"
 	"github.com/Ajay6601/embedcache/internal/upstream"
@@ -53,6 +55,17 @@ type Proxy struct {
 	MaxBatchItems int
 	// MaxBody rejects oversized request bodies.
 	MaxBody int64
+
+	// Semantic near-duplicate matching. Off unless SemanticMode is "shadow" or
+	// "active" and Semantic is non-nil. In shadow mode nothing about serving
+	// changes — the proxy only measures how far a near-neighbor's vector is from
+	// the real one, so you can decide whether active mode is safe on your data.
+	// In active mode a near-duplicate above SemanticThreshold is served the
+	// neighbor's cached vector instead of being computed. Only text inputs
+	// participate; token-array inputs never do.
+	Semantic          *semantic.Index
+	SemanticMode      string  // "off" | "shadow" | "active"
+	SemanticThreshold float64 // Jaccard similarity in [0,1]
 
 	logMu   sync.Mutex
 	logFile *os.File
@@ -176,13 +189,41 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	entries := make([]cache.Entry, len(items))
 	var uniqueMissing []string
 	missingIdx := map[string][]int{}
-	hits, savedTokens := 0, 0
+	hits, savedTokens, semanticHits := 0, 0, 0
+	// shadow-mode observations: for a missed item that had a near neighbor, the
+	// item index, that neighbor's cached vector, and their text similarity — so
+	// after the real vector is computed we can measure how wrong serving the
+	// neighbor would have been, without actually serving it.
+	type shadowCand struct {
+		idx      int
+		neighbor cache.Entry
+		sim      float64
+	}
+	var shadow []shadowCand
+	semOn := p.Semantic != nil && (p.SemanticMode == "shadow" || p.SemanticMode == "active")
 	for i, k := range keys {
 		if e, ok := p.Cache.Get(k); ok {
 			entries[i] = e
 			hits++
 			savedTokens += e.Tokens
 			continue
+		}
+		// exact-match miss. If semantic matching is on and this is a text input,
+		// look for a near-duplicate already in the cache.
+		if semOn && !items[i].IsTokens {
+			if nk, sim, ok := p.Semantic.Nearest(items[i].Text); ok && sim >= p.SemanticThreshold {
+				if ne, cached := p.Cache.Get(nk); cached {
+					if p.SemanticMode == "active" {
+						// serve the neighbor's vector instead of computing
+						entries[i] = ne
+						semanticHits++
+						savedTokens += ne.Tokens
+						continue
+					}
+					// shadow: remember it, but fall through and compute for real
+					shadow = append(shadow, shadowCand{idx: i, neighbor: ne, sim: sim})
+				}
+			}
 		}
 		if _, seen := missingIdx[k]; !seen {
 			uniqueMissing = append(uniqueMissing, k)
@@ -278,6 +319,12 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 				p.Cache.Set(k, e)
 				p.Group.Fulfill(k, e)
 				delete(pending, k)
+				// index this input's text so future near-duplicates can find it
+				if semOn {
+					if it := items[missingIdx[k][0]]; !it.IsTokens {
+						p.Semantic.Add(k, it.Text)
+					}
+				}
 				for _, idx := range missingIdx[k] {
 					entries[idx] = e
 				}
@@ -309,6 +356,18 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// shadow mode: now that the real vectors exist, measure how close each near
+	// neighbor's cached vector was to the truth. This is the number that tells
+	// you whether active semantic caching would be safe on your data — recorded,
+	// never served.
+	for _, c := range shadow {
+		real, ok1 := parseVector(entries[c.idx].Raw)
+		cand, ok2 := parseVector(c.neighbor.Raw)
+		if ok1 && ok2 {
+			p.Stats.RecordSemanticShadow(c.sim, cosineSim(real, cand))
+		}
+	}
+
 	p.Stats.Record(stats.RequestRecord{
 		Model:         req.Model,
 		Caller:        callerHash(credential),
@@ -317,6 +376,7 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 		Coalesced:     coalesced,
 		SavedTokens:   savedTokens,
 		SpentTokens:   spentTokens,
+		SemanticHits:  semanticHits,
 		UpstreamCalls: upstreamCalls,
 		UpstreamItems: upstreamItems,
 	})
@@ -335,11 +395,17 @@ func (p *Proxy) ServeEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
-	h.Set("X-Embedcache-Hits", fmt.Sprint(hits))
+	// a semantic (near-duplicate) hit is served from cache like an exact hit, so
+	// it counts toward Hits and the overall status; the separate header lets a
+	// caller see how many were approximate.
+	h.Set("X-Embedcache-Hits", fmt.Sprint(hits+semanticHits))
 	h.Set("X-Embedcache-Misses", fmt.Sprint(misses))
 	h.Set("X-Embedcache-Coalesced", fmt.Sprint(coalesced))
+	if semanticHits > 0 {
+		h.Set("X-Embedcache-Semantic-Hits", fmt.Sprint(semanticHits))
+	}
 	h.Set("X-Embedcache-Saved-Tokens", fmt.Sprint(savedTokens))
-	h.Set("X-Embedcache-Status", cacheStatus(hits, misses, coalesced))
+	h.Set("X-Embedcache-Status", cacheStatus(hits+semanticHits, misses, coalesced))
 	if rem, limited := p.Budget.Remaining(credential); limited {
 		h.Set("X-Embedcache-Budget-Remaining", fmt.Sprint(rem))
 	}
@@ -355,6 +421,32 @@ func cacheStatus(hits, misses, coalesced int) string {
 	default:
 		return "partial"
 	}
+}
+
+// parseVector decodes a float-array embedding from its raw JSON. Base64-encoded
+// vectors return ok=false (shadow evaluation simply skips them).
+func parseVector(raw []byte) ([]float64, bool) {
+	var v []float64
+	if json.Unmarshal(raw, &v) == nil && len(v) > 0 {
+		return v, true
+	}
+	return nil, false
+}
+
+func cosineSim(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		dot += a[i] * b[i]
+		na += a[i] * a[i]
+		nb += b[i] * b[i]
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 // callerHash normalizes a credential to a short display hash. The Bearer

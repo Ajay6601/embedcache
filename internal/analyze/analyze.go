@@ -154,9 +154,13 @@ func Run(r io.Reader, opts Options) (*Result, error) {
 	return res, nil
 }
 
-// extractRequest digs an embeddings request out of a log line: either the
-// line is the request itself, or it wraps one under body/request/payload
-// (as an object or as a string of JSON).
+// extractRequest digs an embeddings request out of a log line. It handles, in
+// order: the line being the request itself; the request wrapped under a common
+// field (body/request/payload/kwargs/json_data...) as an object or a string of
+// JSON; and finally any embeddings request nested anywhere in the structure.
+// That last, recursive step is what lets it read LiteLLM proxy logs, OpenAI SDK
+// request dumps, and arbitrary gateway/access logs without per-vendor code:
+// whatever envelope wraps a {"model", "input"} object, it is found.
 func extractRequest(line []byte) (*api.EmbeddingsRequest, bool) {
 	var direct api.EmbeddingsRequest
 	if err := json.Unmarshal(line, &direct); err == nil && direct.Model != "" && len(direct.Input) > 0 {
@@ -166,7 +170,7 @@ func extractRequest(line []byte) (*api.EmbeddingsRequest, bool) {
 	if err := json.Unmarshal(line, &wrapper); err != nil {
 		return nil, false
 	}
-	for _, field := range []string{"body", "request", "payload"} {
+	for _, field := range []string{"body", "request", "payload", "kwargs", "request_kwargs", "json_data", "json", "data"} {
 		raw, ok := wrapper[field]
 		if !ok {
 			continue
@@ -179,6 +183,53 @@ func extractRequest(line []byte) (*api.EmbeddingsRequest, bool) {
 		var req api.EmbeddingsRequest
 		if err := json.Unmarshal(raw, &req); err == nil && req.Model != "" && len(req.Input) > 0 {
 			return &req, true
+		}
+	}
+	// last resort: walk the whole parsed structure for an embeddings request
+	// nested at any depth (covers log shapes we don't enumerate above).
+	var tree any
+	if err := json.Unmarshal(line, &tree); err != nil {
+		return nil, false
+	}
+	if raw, ok := findEmbeddingsObject(tree); ok {
+		var req api.EmbeddingsRequest
+		if err := json.Unmarshal(raw, &req); err == nil && req.Model != "" && len(req.Input) > 0 {
+			return &req, true
+		}
+	}
+	return nil, false
+}
+
+// findEmbeddingsObject searches a decoded JSON tree for the first object that
+// looks like an embeddings request (a string "model" and a present "input"),
+// returning it re-marshaled so typed decoding (including provider Extra params)
+// still applies.
+func findEmbeddingsObject(v any) (json.RawMessage, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		model, hasModel := t["model"].(string)
+		_, hasInput := t["input"]
+		if hasModel && model != "" && hasInput {
+			if raw, err := json.Marshal(t); err == nil {
+				return raw, true
+			}
+		}
+		for _, child := range t {
+			if raw, ok := findEmbeddingsObject(child); ok {
+				return raw, true
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if raw, ok := findEmbeddingsObject(child); ok {
+				return raw, true
+			}
+		}
+	case string:
+		// a field holding JSON-in-a-string (common in access logs)
+		var inner any
+		if json.Unmarshal([]byte(t), &inner) == nil {
+			return findEmbeddingsObject(inner)
 		}
 	}
 	return nil, false

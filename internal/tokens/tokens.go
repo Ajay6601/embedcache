@@ -1,12 +1,17 @@
 // Package tokens estimates token counts for savings accounting.
 //
-// The heuristic (~4 chars per token for text) is deliberately rough: it is
-// only used to apportion upstream-reported usage across batch items and to
-// estimate waste in the offline analyzer, never for billing.
+// The heuristic is deliberately rough: it is only used to apportion
+// upstream-reported usage across batch items and to estimate waste in the
+// offline analyzer, never for billing. The bytes/4 rule is fine for Latin
+// script but badly overcounts CJK and other wide scripts (a Chinese character
+// is ~3 UTF-8 bytes but often ~1 token), which validation measured drifting by
+// tens of percent. EstimateText counts CJK/wide runes at ~1 token each and the
+// rest at ~4 bytes/token, which tracks real tokenizers much more closely.
 package tokens
 
 import (
 	"sort"
+	"unicode/utf8"
 
 	"github.com/Ajay6601/embedcache/internal/api"
 )
@@ -18,19 +23,48 @@ func Estimate(item api.InputItem) int {
 		}
 		return len(item.Tokens)
 	}
-	n := (len(item.Text) + 3) / 4
+	return EstimateText(item.Text)
+}
+
+func EstimateText(text string) int {
+	// Split the estimate by script: wide (CJK, Hiragana/Katakana, Hangul)
+	// characters are roughly one token each; everything else follows the
+	// ~4-bytes-per-token rule. This keeps Latin text unchanged while fixing the
+	// large overcount on Chinese/Japanese/Korean the byte rule produced.
+	wide := 0
+	narrowBytes := 0
+	for _, r := range text {
+		if isWide(r) {
+			wide++
+		} else {
+			narrowBytes += utf8.RuneLen(r)
+		}
+	}
+	n := wide + (narrowBytes+3)/4
 	if n < 1 {
 		n = 1
 	}
 	return n
 }
 
-func EstimateText(text string) int {
-	n := (len(text) + 3) / 4
-	if n < 1 {
-		n = 1
+// isWide reports whether a rune is from a script that tokenizes at roughly one
+// token per character rather than the Latin ~4-bytes-per-token rate.
+func isWide(r rune) bool {
+	switch {
+	case r >= 0x3400 && r <= 0x9FFF: // CJK Unified Ideographs (+ Extension A)
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK Compatibility Ideographs
+		return true
+	case r >= 0x20000 && r <= 0x2FA1F: // CJK Extension B+ (supplementary)
+		return true
+	case r >= 0x3040 && r <= 0x30FF: // Hiragana + Katakana
+		return true
+	case r >= 0xAC00 && r <= 0xD7A3: // Hangul syllables
+		return true
+	case r >= 0x3000 && r <= 0x303F: // CJK symbols and punctuation
+		return true
 	}
-	return n
+	return false
 }
 
 // Apportion splits an exact total (upstream-reported prompt_tokens) across

@@ -22,10 +22,20 @@ type Entry struct {
 
 const shardCount = 16
 
+// Shared is an optional second-level cache (e.g. Redis) that multiple
+// embedcache instances point at, so a vector one instance computed is reused by
+// the whole fleet instead of every replica starting cold. Implementations must
+// be safe for concurrent use; a miss returns ok=false.
+type Shared interface {
+	Get(key string) (Entry, bool)
+	Set(key string, e Entry)
+}
+
 type Cache struct {
 	shards             [shardCount]*shard
 	maxEntriesPerShard int
 	maxBytesPerShard   int64
+	shared             Shared
 }
 
 type shard struct {
@@ -59,6 +69,10 @@ func New(maxEntries int, maxBytes int64) *Cache {
 	return c
 }
 
+// SetShared attaches a second-level shared cache (read-through on a local miss,
+// write-through on Set). Pass nil to run purely in-memory.
+func (c *Cache) SetShared(s Shared) { c.shared = s }
+
 func (c *Cache) shardFor(key string) *shard {
 	if len(key) == 0 {
 		return c.shards[0]
@@ -69,23 +83,45 @@ func (c *Cache) shardFor(key string) *shard {
 func (c *Cache) Get(key string) (Entry, bool) {
 	s := c.shardFor(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	el, ok := s.items[key]
-	if !ok {
-		return Entry{}, false
+	if ok {
+		item := el.Value.(*lruItem)
+		if item.entry.ExpiresAt > 0 && time.Now().UnixNano() > item.entry.ExpiresAt {
+			s.ll.Remove(el)
+			delete(s.items, key)
+			s.bytes -= int64(len(item.entry.Raw))
+			ok = false
+		} else {
+			s.ll.MoveToFront(el)
+			e := item.entry
+			s.mu.Unlock()
+			return e, true
+		}
 	}
-	item := el.Value.(*lruItem)
-	if item.entry.ExpiresAt > 0 && time.Now().UnixNano() > item.entry.ExpiresAt {
-		s.ll.Remove(el)
-		delete(s.items, key)
-		s.bytes -= int64(len(item.entry.Raw))
-		return Entry{}, false
+	s.mu.Unlock()
+
+	// local miss: consult the shared tier and, on a hit, warm the local cache so
+	// the next lookup is served in-process.
+	if c.shared != nil {
+		if e, hit := c.shared.Get(key); hit {
+			c.setLocal(key, e)
+			return e, true
+		}
 	}
-	s.ll.MoveToFront(el)
-	return item.entry, true
+	return Entry{}, false
 }
 
+// Set stores an entry locally and, if a shared tier is attached, write-through
+// to it. The shared write is asynchronous so it never adds latency to the
+// response path (the local copy is what this request serves).
 func (c *Cache) Set(key string, e Entry) {
+	c.setLocal(key, e)
+	if c.shared != nil {
+		go c.shared.Set(key, e)
+	}
+}
+
+func (c *Cache) setLocal(key string, e Entry) {
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()

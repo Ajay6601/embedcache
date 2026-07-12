@@ -25,6 +25,7 @@ type Normalizer struct {
 	TrimSpace          bool // strip leading/trailing whitespace
 	CollapseWhitespace bool // collapse runs of whitespace to a single space
 	Lowercase          bool // ASCII-insensitive matching; wrong for case-sensitive corpora
+	NFC                bool // fold canonical Latin combining sequences (see foldNFC)
 }
 
 // ParseNormalizer builds a Normalizer from a comma-separated rule list, e.g.
@@ -42,6 +43,8 @@ func ParseNormalizer(spec string) (Normalizer, error) {
 			n.CollapseWhitespace = true
 		case "lowercase":
 			n.Lowercase = true
+		case "nfc":
+			n.NFC = true
 		case "":
 		default:
 			return n, &UnknownRuleError{Rule: rule}
@@ -53,11 +56,14 @@ func ParseNormalizer(spec string) (Normalizer, error) {
 type UnknownRuleError struct{ Rule string }
 
 func (e *UnknownRuleError) Error() string {
-	return "unknown normalization rule: " + e.Rule + " (valid: trim, collapse, lowercase)"
+	return "unknown normalization rule: " + e.Rule + " (valid: trim, collapse, lowercase, nfc)"
 }
 
 // Apply returns the canonical form of text under this normalizer.
 func (n Normalizer) Apply(text string) string {
+	if n.NFC {
+		text = foldNFC(text)
+	}
 	if n.TrimSpace {
 		text = strings.TrimSpace(text)
 	}
@@ -68,6 +74,119 @@ func (n Normalizer) Apply(text string) string {
 		text = strings.ToLower(text)
 	}
 	return text
+}
+
+// foldNFC composes a base letter followed by a canonical combining mark into
+// its precomposed form, so text that arrives decomposed (NFD, e.g. "e"+U+0301)
+// caches as the same entry as the precomposed form (NFC, U+00E9). Validation
+// found this NFC/NFD split leaking as duplicate cache entries.
+//
+// Scope, stated honestly: this covers the common Latin combining sequences
+// (accented a/e/i/o/u/y/n/c and their capitals with grave, acute, circumflex,
+// tilde, diaeresis, ring, and cedilla) — which is where real-world NFC/NFD
+// divergence overwhelmingly occurs. It is a deliberate zero-dependency subset,
+// not full Unicode NFC (that would require golang.org/x/text). Anything not in
+// the table passes through unchanged, so folding is never wrong, only partial.
+func foldNFC(text string) string {
+	// fast path: no combining marks present, nothing to do
+	hasCombining := false
+	for _, r := range text {
+		if r >= 0x0300 && r <= 0x036F {
+			hasCombining = true
+			break
+		}
+	}
+	if !hasCombining {
+		return text
+	}
+	rs := []rune(text)
+	out := make([]rune, 0, len(rs))
+	for i := 0; i < len(rs); i++ {
+		if i+1 < len(rs) {
+			if composed, ok := nfcCompose[[2]rune{rs[i], rs[i+1]}]; ok {
+				out = append(out, composed)
+				i++ // consume the combining mark
+				continue
+			}
+		}
+		out = append(out, rs[i])
+	}
+	return string(out)
+}
+
+// nfcCompose maps (base rune, combining mark) -> precomposed rune for the common
+// Latin combining sequences. Built once at init from a compact description so
+// the table stays readable and correct.
+var nfcCompose = buildNFCTable()
+
+func buildNFCTable() map[[2]rune]rune {
+	const (
+		grave      = 0x0300
+		acute      = 0x0301
+		circumflex = 0x0302
+		tilde      = 0x0303
+		diaeresis  = 0x0308
+		ring       = 0x030A
+		cedilla    = 0x0327
+	)
+	m := map[[2]rune]rune{}
+	add := func(base rune, mark rune, composed rune) { m[[2]rune{base, mark}] = composed }
+	// lowercase
+	add('a', grave, 'à')
+	add('a', acute, 'á')
+	add('a', circumflex, 'â')
+	add('a', tilde, 'ã')
+	add('a', diaeresis, 'ä')
+	add('a', ring, 'å')
+	add('e', grave, 'è')
+	add('e', acute, 'é')
+	add('e', circumflex, 'ê')
+	add('e', diaeresis, 'ë')
+	add('i', grave, 'ì')
+	add('i', acute, 'í')
+	add('i', circumflex, 'î')
+	add('i', diaeresis, 'ï')
+	add('o', grave, 'ò')
+	add('o', acute, 'ó')
+	add('o', circumflex, 'ô')
+	add('o', tilde, 'õ')
+	add('o', diaeresis, 'ö')
+	add('u', grave, 'ù')
+	add('u', acute, 'ú')
+	add('u', circumflex, 'û')
+	add('u', diaeresis, 'ü')
+	add('y', acute, 'ý')
+	add('y', diaeresis, 'ÿ')
+	add('n', tilde, 'ñ')
+	add('c', cedilla, 'ç')
+	// uppercase
+	add('A', grave, 'À')
+	add('A', acute, 'Á')
+	add('A', circumflex, 'Â')
+	add('A', tilde, 'Ã')
+	add('A', diaeresis, 'Ä')
+	add('A', ring, 'Å')
+	add('E', grave, 'È')
+	add('E', acute, 'É')
+	add('E', circumflex, 'Ê')
+	add('E', diaeresis, 'Ë')
+	add('I', grave, 'Ì')
+	add('I', acute, 'Í')
+	add('I', circumflex, 'Î')
+	add('I', diaeresis, 'Ï')
+	add('O', grave, 'Ò')
+	add('O', acute, 'Ó')
+	add('O', circumflex, 'Ô')
+	add('O', tilde, 'Õ')
+	add('O', diaeresis, 'Ö')
+	add('U', grave, 'Ù')
+	add('U', acute, 'Ú')
+	add('U', circumflex, 'Û')
+	add('U', diaeresis, 'Ü')
+	add('Y', acute, 'Ý')
+	add('N', tilde, 'Ñ')
+	add('C', cedilla, 'Ç')
+	return m
 }
 
 // ParamsDigest canonicalizes provider-specific request parameters (Voyage's
