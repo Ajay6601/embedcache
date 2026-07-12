@@ -448,6 +448,12 @@ func main() {
 	line("")
 	line("aggregate proxy stats after the crew run: hits=%d misses=%d coalesced=%d",
 		statInt(stats, "hits"), statInt(stats, "misses"), statInt(stats, "coalesced"))
+	line("")
+	line("Note: because the workers run concurrently, the cross-agent reuse shows up as *coalesced*")
+	line("requests (two agents embedding the identical query in the same instant collapse to one")
+	line("upstream call) rather than settled cache hits — the stronger property under real concurrency.")
+	line("A coalesced request returns `X-Embedcache-Status: hit` to the caller (it was not sent")
+	line("upstream), which is why each worker still counts it as a cache hit above.")
 
 	section("Synthesizer")
 	summary := ""
