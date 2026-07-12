@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>embedcache — stop paying for the same embedding twice</title>
-<meta name="description" content="A single-binary caching and dedupe proxy for embedding APIs. Drop it in front of Ollama, vLLM, OpenAI, or Gemini and cut duplicate embedding spend — measured at ~50% on real workloads.">
+<title>embedcache: stop paying for the same embedding twice</title>
+<meta name="description" content="A single-binary caching and dedupe proxy for embedding APIs. Drop it in front of Ollama, vLLM, OpenAI, or Gemini and cut duplicate embedding spend, measured at ~50% on real workloads.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -26,7 +26,7 @@
     <h1>Your apps embed the same text <em>over and over</em>.<br>Stop paying for it.</h1>
     <p class="sub">
       embedcache is a single-binary proxy that sits in front of any OpenAI-compatible
-      embedding API — Ollama, vLLM, TEI, OpenAI, Gemini — remembers every answer,
+      embedding API (Ollama, vLLM, TEI, OpenAI, Gemini), remembers every answer,
       and only forwards what it has never seen. Then it hands you the invoice for what it saved.
     </p>
     <div class="install" id="install-cmd" title="click to copy">
@@ -45,9 +45,9 @@
   </div>
 
   <div class="stats">
-    <div class="stat"><b>49.7%</b><span>of a real RAG agent's embedding tokens were duplicate work — measured organically, zero constructed duplicates</span><a href="https://github.com/Ajay6601/embedcache/blob/main/REALTEST.md">REALTEST.md &rarr;</a></div>
+    <div class="stat"><b>49.7%</b><span>of a real RAG agent's embedding tokens were duplicate work, measured organically with zero constructed duplicates</span><a href="https://github.com/Ajay6601/embedcache/blob/main/REALTEST.md">REALTEST.md &rarr;</a></div>
     <div class="stat"><b>39k req/s</b><span>sustained cache-hit throughput at p99 6.9&nbsp;ms, 64 concurrent clients</span><a href="https://github.com/Ajay6601/embedcache/blob/main/PRODSIM.md">PRODSIM.md &rarr;</a></div>
-    <div class="stat"><b>0 wrong bytes</b><span>hits replay the upstream's exact bytes — verified across 430k+ requests and a hard crash-restart</span><a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">EXPERIMENTS.md &rarr;</a></div>
+    <div class="stat"><b>0 wrong bytes</b><span>hits replay the upstream's exact bytes, verified across 430k+ requests and a hard crash-restart</span><a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">EXPERIMENTS.md &rarr;</a></div>
     <div class="stat"><b>1 binary</b><span>pure Go stdlib. No Python runtime, no Redis, no framework lock-in. Works with every language.</span><a href="https://github.com/Ajay6601/embedcache">source &rarr;</a></div>
   </div>
 
@@ -55,8 +55,8 @@
     <h2>Step zero: see your waste before installing anything</h2>
     <p class="lead">
       Point the offline analyzer at the request logs you already have. It fingerprints every
-      input and tells you exactly how much of your embedding spend was duplicates —
-      no proxy in the request path, no risk, just the number.
+      input and tells you exactly how much of your embedding spend was duplicates.
+      No proxy in the request path, no risk, just the number.
     </p>
     <div class="term" style="margin-top:0">
       <div class="bar"><i></i><i></i><i></i><span>embedcache analyze</span></div>
@@ -74,11 +74,11 @@
       </div>
       <div class="step">
         <h3>Serve, coalesce, or forward</h3>
-        <p>Known items replay the upstream's exact bytes. Items being computed <em>right now</em> by another request wait for that result. Only the truly new remainder goes upstream — even inside mixed batches.</p>
+        <p>Known items replay the upstream's exact bytes. Items being computed <em>right now</em> by another request wait for that result. Only the truly new remainder goes upstream, even inside mixed batches.</p>
       </div>
       <div class="step">
         <h3>Account for everything</h3>
-        <p>Every hit, miss, token, and dollar is tracked per model and per API key — live waste report, JSON stats, Prometheus metrics.</p>
+        <p>Every hit, miss, token, and dollar is tracked per model and per API key: live waste report, JSON stats, Prometheus metrics.</p>
       </div>
     </div>
   </section>
@@ -86,19 +86,19 @@
   <section class="block">
     <h2>Built like infrastructure, because it is</h2>
     <div class="grid3">
-      <div class="card"><h3><span class="dot"></span>Byte-exact, provably</h3><p>Cache hits return the identical bytes the upstream produced — no float re-encoding, no precision drift. Mixed cached/uncached batches keep perfect index mapping (the bug class <a href="https://github.com/BerriAI/litellm/issues/22659">other gateways get wrong</a>).</p></div>
+      <div class="card"><h3><span class="dot"></span>Byte-exact, provably</h3><p>Cache hits return the identical bytes the upstream produced, with no float re-encoding or precision drift. Mixed cached/uncached batches keep perfect index mapping (the bug class <a href="https://github.com/BerriAI/litellm/issues/22659">other gateways get wrong</a>).</p></div>
       <div class="card"><h3><span class="dot"></span>In-flight coalescing</h3><p>200 concurrent requests for the same input trigger exactly one upstream computation. Works across overlapping batches, per item.</p></div>
-      <div class="card"><h3><span class="dot"></span>Real auth on the hit path</h3><p>Allowlist or upstream-verified API keys — a revoked key can't read cached vectors. Admin endpoints behind a bearer token.</p></div>
-      <div class="card"><h3><span class="dot"></span>Outage-tolerant</h3><p>Retries with backoff, then a circuit breaker fails fast. Cache hits keep serving while your backend is down — an outage degrades misses, not the service.</p></div>
+      <div class="card"><h3><span class="dot"></span>Real auth on the hit path</h3><p>Allowlist or upstream-verified API keys: a revoked key can't read cached vectors. Admin endpoints behind a bearer token.</p></div>
+      <div class="card"><h3><span class="dot"></span>Outage-tolerant</h3><p>Retries with backoff, then a circuit breaker fails fast. Cache hits keep serving while your backend is down: an outage degrades misses, not the service.</p></div>
       <div class="card"><h3><span class="dot"></span>Survives restarts</h3><p>Snapshot persistence: 52,500 entries hard-crashed and restored byte-exact in the validation run. On-demand snapshots via the admin API.</p></div>
-      <div class="card"><h3><span class="dot"></span>No semantic guessing</h3><p>Exact-match only, on purpose: a 0% wrong-answer rate by construction. Similarity-threshold caching returns wrong vectors at some rate — we don't.</p></div>
+      <div class="card"><h3><span class="dot"></span>No semantic guessing</h3><p>Exact-match only, on purpose: a 0% wrong-answer rate by construction. Similarity-threshold caching returns wrong vectors at some rate; we don't.</p></div>
     </div>
   </section>
 
   <section class="block">
     <h2>Who saves what</h2>
     <div class="grid3">
-      <div class="card"><h3>RAG pipelines</h3><p>Nightly re-ingestion re-embeds corpora that barely changed. Measured live: re-fetching 103 real Wikipedia articles an hour later was <b>100% absorbed</b> — a real pipeline would have paid for all 8,601 chunks again.</p></div>
+      <div class="card"><h3>RAG pipelines</h3><p>Nightly re-ingestion re-embeds corpora that barely changed. Measured live: re-fetching 103 real Wikipedia articles an hour later was <b>100% absorbed</b>: a real pipeline would have paid for all 8,601 chunks again.</p></div>
       <div class="card"><h3>Agents</h3><p>Agent loops re-embed queries, expansions, and tool contexts relentlessly. A real agent's query traffic was <b>21.7% repeats</b> with zero cache-friendly tricks.</p></div>
       <div class="card"><h3>Platform teams</h3><p>Multiple services embedding the same strings against shared infra, with per-key accounting so you finally know <em>which team</em> burns the GPU hours.</p></div>
     </div>
@@ -112,7 +112,7 @@ embedcache serve -upstream http://localhost:8000      <span class="cm"># vLLM</s
 
 <span class="cm"># in front of a hosted API</span>
 embedcache serve -upstream https://api.openai.com</pre>
-    <p class="lead" style="margin-bottom:0.6rem">Point your SDK at it — no code changes:</p>
+    <p class="lead" style="margin-bottom:0.6rem">Point your SDK at it, no code changes:</p>
     <pre class="code"><span class="kw">client</span> = OpenAI(base_url=<span class="st">"http://localhost:8090/v1"</span>, api_key=<span class="st">"..."</span>)
 client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>, input=[<span class="st">"hello"</span>])</pre>
     <div class="cta-row" style="justify-content:flex-start">
@@ -140,7 +140,7 @@ playTerminal("term-serve", [
   { html: '<span class="c-amber">&lt; X-Embedcache-Status: miss</span>   <span class="c-dim">(computed by your GPU, now remembered)</span>', pause: 900 },
   { cmd: "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":\"how do I reset my password\"}'", pause: 400 },
   { html: '<span class="c-green">&lt; X-Embedcache-Status: hit</span>    <span class="c-dim">byte-exact replay</span>', pause: 100 },
-  { html: '<span class="c-green">&lt; X-Embedcache-Saved-Tokens: 7</span> <span class="c-dim">usage.prompt_tokens: 0 — this one was free</span>', pause: 1400 },
+  { html: '<span class="c-green">&lt; X-Embedcache-Saved-Tokens: 7</span> <span class="c-dim">usage.prompt_tokens: 0, this one was free</span>', pause: 1400 },
 ], { holdMs: 6000 });
 
 playTerminal("term-analyze", [

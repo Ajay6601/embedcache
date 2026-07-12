@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Documentation — embedcache</title>
+<title>Documentation: embedcache</title>
 <meta name="description" content="embedcache documentation: installation, configuration, security, resilience, metrics, and the waste analyzer.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
 <link rel="stylesheet" href="style.css">
@@ -62,7 +62,7 @@ go build -o embedcache ./cmd/embedcache</pre>
     <h3>Docker</h3>
     <pre class="code">docker build -t embedcache https://github.com/Ajay6601/embedcache.git
 docker run -p 8090:8090 embedcache serve -listen :8090 -upstream http://host.docker.internal:11434</pre>
-    <p>The binary has zero runtime dependencies — copy it anywhere and run it.</p>
+    <p>The binary has zero runtime dependencies, so copy it anywhere and run it.</p>
 
     <h2 id="quickstart">Quickstart</h2>
     <p>Start the proxy in front of your embedding backend:</p>
@@ -98,7 +98,7 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
     <div class="note">
       <b>Billing semantics:</b> <code>usage.prompt_tokens</code> in the response reflects only
       what <em>this request</em> was actually billed upstream. Cache hits and coalesced items
-      cost zero. Your existing usage accounting keeps working — it just gets smaller.
+      cost zero. Your existing usage accounting keeps working; it just gets smaller.
     </div>
 
     <h2 id="how">How it works</h2>
@@ -106,13 +106,13 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
       <li><b>Fingerprint.</b> Each input item is hashed with its full identity:
       <code>SHA-256(model, dimensions, encoding_format, provider params, content)</code>.
       Provider-specific parameters (Voyage's <code>input_type</code>/<code>output_dtype</code>,
-      Mistral extras, vLLM options) are forwarded upstream verbatim and included in the key —
-      the same text under different params gets different vectors, so it gets different
+      Mistral extras, vLLM options) are forwarded upstream verbatim and included in the key.
+      The same text under different params gets different vectors, so it gets different
       entries. Two items share a cache entry only when the upstream response is guaranteed
       interchangeable. Token-array inputs are supported and never collide with text.</li>
       <li><b>Split the batch.</b> Cached items are answered from memory as byte-exact replays
       of the upstream's original JSON. Items currently being computed by <em>any other
-      request</em> are coalesced — the request waits for that result instead of recomputing.
+      request</em> are coalesced: the request waits for that result instead of recomputing.
       Duplicates within one batch are computed once.</li>
       <li><b>Forward the remainder.</b> Only never-seen items go upstream, as one batch.
       Results are cached, distributed to all waiters, and reassembled at their original
@@ -133,37 +133,37 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
       <tr><td><code>-upstream-api-key</code></td><td>forward client's</td><td>pin one upstream key for all traffic</td></tr>
       <tr><td><code>-upstream-timeout</code></td><td><code>120s</code></td><td>per-call upstream timeout</td></tr>
       <tr><td><code>-budget-tokens</code></td><td>off</td><td>default per-key upstream-spend budget per window</td></tr>
-      <tr><td><code>-budgets-file</code></td><td>—</td><td>JSON <code>{"key": tokensPerWindow}</code>; <code>"default"</code> overrides <code>-budget-tokens</code>, 0 = unlimited</td></tr>
+      <tr><td><code>-budgets-file</code></td><td>none</td><td>JSON <code>{"key": tokensPerWindow}</code>; <code>"default"</code> overrides <code>-budget-tokens</code>, 0 = unlimited</td></tr>
       <tr><td><code>-budget-window</code></td><td><code>24h</code></td><td>budget reset cadence</td></tr>
       <tr><td><code>-upstream-retries</code></td><td><code>2</code></td><td>extra attempts for transient failures (network, 5xx, 429); honors <code>Retry-After</code></td></tr>
       <tr><td><code>-breaker-threshold</code></td><td><code>5</code></td><td>consecutive failures before the circuit opens (0 disables)</td></tr>
       <tr><td><code>-breaker-cooldown</code></td><td><code>10s</code></td><td>open duration before a single probe is admitted</td></tr>
       <tr><td><code>-max-entries</code></td><td><code>1000000</code></td><td>LRU bound on cached embeddings (0 = unlimited)</td></tr>
       <tr><td><code>-max-memory-mb</code></td><td><code>1024</code></td><td>LRU bound on cached payload bytes (0 = unlimited)</td></tr>
-      <tr><td><code>-ttl</code></td><td>never</td><td>expire entries after this duration — set it if model weights can change under the same name</td></tr>
+      <tr><td><code>-ttl</code></td><td>never</td><td>expire entries after this duration; set it if model weights can change under the same name</td></tr>
       <tr><td><code>-normalize</code></td><td>off</td><td>opt-in matching rules: <code>trim,collapse,lowercase</code></td></tr>
       <tr><td><code>-persist</code></td><td>off</td><td>snapshot file; loaded at start, written on shutdown and every <code>-persist-interval</code></td></tr>
       <tr><td><code>-persist-interval</code></td><td><code>5m</code></td><td>periodic snapshot cadence</td></tr>
       <tr><td><code>-admin-token</code></td><td>open</td><td>bearer token required for stats/report/metrics/flush/snapshot</td></tr>
       <tr><td><code>-auth-mode</code></td><td><code>off</code></td><td>client key validation: <code>allowlist</code> or <code>verify</code></td></tr>
-      <tr><td><code>-api-keys</code> / <code>-api-keys-file</code></td><td>—</td><td>accepted client keys for allowlist mode (CSV / one per line)</td></tr>
+      <tr><td><code>-api-keys</code> / <code>-api-keys-file</code></td><td>none</td><td>accepted client keys for allowlist mode (CSV / one per line)</td></tr>
       <tr><td><code>-auth-cache-ttl</code></td><td><code>5m</code></td><td>how long a verify-mode verdict is trusted</td></tr>
       <tr><td><code>-max-batch-items</code></td><td><code>2048</code></td><td>reject larger batches with 400</td></tr>
       <tr><td><code>-max-body-mb</code></td><td><code>64</code></td><td>reject larger bodies with 413</td></tr>
-      <tr><td><code>-request-log</code></td><td>off</td><td>JSONL log of embedding requests — feeds <code>embedcache analyze</code></td></tr>
+      <tr><td><code>-request-log</code></td><td>off</td><td>JSONL log of embedding requests, feeds <code>embedcache analyze</code></td></tr>
       <tr><td><code>-request-log-max-mb</code></td><td><code>512</code></td><td>rotate the log at this size (one <code>.1</code> backup kept)</td></tr>
       <tr><td><code>-pricing</code></td><td>built-in</td><td>JSON <code>{"model": $/1M tokens, "default": ...}</code> for the $ figures</td></tr>
     </table>
 
     <h2 id="analyzer">The waste analyzer</h2>
-    <p>The analyzer is how you find out whether embedcache is worth deploying —
+    <p>The analyzer is how you find out whether embedcache is worth deploying,
     <em>before</em> deploying it. Feed it JSONL request logs (one embedding request per
     line, either raw bodies or wrapped under <code>body</code>/<code>request</code>/<code>payload</code>):</p>
     <pre class="code">embedcache analyze requests.jsonl
 embedcache analyze -json requests.jsonl | jq .duplicate_rate
 cat logs/*.jsonl | embedcache analyze</pre>
     <p>It fingerprints every input exactly like the live proxy, so its duplicate count is
-    exactly what the cache would have absorbed — validated to agree with a live proxy to
+    exactly what the cache would have absorbed, validated to agree with a live proxy to
     the item on identical traffic.</p>
     <pre class="code"><span class="cm"># useful flags</span>
 -default-price 0.05   <span class="cm"># $/1M tokens for self-hosted models (amortized GPU cost)</span>
@@ -171,13 +171,13 @@ cat logs/*.jsonl | embedcache analyze</pre>
 -normalize trim       <span class="cm"># preview what normalization would add</span>
 -top 25               <span class="cm"># show more of the top duplicated inputs</span></pre>
     <p>To produce logs the analyzer can read, run the proxy with <code>-request-log</code>,
-    or dump requests from your own gateway/app — the format is forgiving.</p>
+    or dump requests from your own gateway/app; the format is forgiving.</p>
 
     <h2 id="chunker">Chunk-diff engine</h2>
     <p>Exact-match caching only helps if re-ingesting a document produces the <em>same chunk
     text</em> as before. Fixed-size chunking (slicing by byte offset) breaks that: any edit
     shifts every chunk boundary after it, so a small edit re-embeds the whole rest of the
-    document. <code>embedcache chunk</code> splits text at content-defined boundaries instead —
+    document. <code>embedcache chunk</code> splits text at content-defined boundaries instead, so
     an edit only changes the one or two chunks touching it.</p>
     <pre class="code">embedcache chunk document.md > chunks.jsonl
 <span class="cm"># one JSON line per chunk: {"hash": "...", "size": 743, "text": "..."}</span>
@@ -186,7 +186,7 @@ cat chunks.jsonl | jq -r .text | while read -r c; do
 done</pre>
     <p>Flags: <code>-min</code>/<code>-avg</code>/<code>-max</code> bound chunk size in bytes
     (defaults 200/800/2000, tuned for paragraph-scale text). Reads a file argument or stdin.</p>
-    <p>Measured on one real, live Wikipedia article with one realistic single-sentence edit —
+    <p>Measured on one real, live Wikipedia article with one realistic single-sentence edit, in
     <a href="https://github.com/Ajay6601/embedcache/blob/main/CHUNKDIFF.md">CHUNKDIFF.md</a>:
     content-defined chunking absorbed <b>93.8%</b> of the re-ingest from cache; fixed-size
     chunking absorbed <b>28.6%</b> on the identical edit.</p>
@@ -194,11 +194,11 @@ done</pre>
     <h2 id="admin">Admin API</h2>
     <table>
       <tr><th>Endpoint</th><th>What it does</th></tr>
-      <tr><td><code>GET /healthz</code></td><td>liveness — always open, for load balancers</td></tr>
+      <tr><td><code>GET /healthz</code></td><td>liveness, always open for load balancers</td></tr>
       <tr><td><code>GET /_ec/stats</code></td><td>full stats as JSON (hit rate, tokens, $, per-model, per-caller, breaker state)</td></tr>
       <tr><td><code>GET /_ec/report</code></td><td>the human waste report (also: <code>embedcache report -addr ...</code>)</td></tr>
       <tr><td><code>GET /metrics</code></td><td>Prometheus text format</td></tr>
-      <tr><td><code>POST /_ec/flush</code></td><td>drop every cache entry — use when model weights change under the same name</td></tr>
+      <tr><td><code>POST /_ec/flush</code></td><td>drop every cache entry, use when model weights change under the same name</td></tr>
       <tr><td><code>POST /_ec/snapshot</code></td><td>write the persistence snapshot now (requires <code>-persist</code>)</td></tr>
     </table>
     <p>All of these except <code>/healthz</code> require <code>Authorization: Bearer
@@ -215,7 +215,7 @@ embedcache_saved_tokens_total / embedcache_spent_tokens_total
 embedcache_saved_usd                      <span class="cm"># at configured pricing</span>
 embedcache_cache_entries / embedcache_cache_bytes</pre>
     <p>The two numbers worth alerting on: <code>embedcache_breaker_open == 1</code>
-    (your backend is down) and a falling hit rate (workload changed — rerun the analyzer).</p>
+    (your backend is down) and a falling hit rate (workload changed, rerun the analyzer).</p>
 
     <h2 id="security">Security</h2>
     <p>Two separate layers, both off by default for painless first contact, both required
@@ -224,7 +224,7 @@ embedcache_cache_entries / embedcache_cache_bytes</pre>
     <pre class="code">embedcache serve -upstream ... -admin-token "$(openssl rand -hex 24)"</pre>
     <p>Without it, anyone who can reach the port can flush your cache and read usage stats.</p>
     <h3>2. Data-plane key validation</h3>
-    <p>Cache hits never touch the upstream — so without this, a revoked or missing API key
+    <p>Cache hits never touch the upstream, so without this a revoked or missing API key
     can still read cached vectors. Two modes:</p>
     <pre class="code"><span class="cm"># allowlist: the proxy owns the key list (self-hosted backends with no auth)</span>
 embedcache serve -upstream http://localhost:8000 \
@@ -236,7 +236,7 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
     caches the verdict for <code>-auth-cache-ttl</code> (rejections for 1 minute; fails
     closed if the upstream is unreachable). Keys are stored in memory only as SHA-256 hashes.</p>
     <div class="note warn">
-      embedcache listens in plaintext by design — terminate TLS in front of it
+      embedcache listens in plaintext by design, so terminate TLS in front of it
       (Caddy, nginx, or your ingress). The request log stores raw input text; treat it
       with the same care as the documents it came from.
     </div>
@@ -246,15 +246,15 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
     <pre class="code">embedcache serve -upstream http://localhost:8000 \
   -budgets-file budgets.json -budget-window 24h
 
-<span class="cm"># budgets.json — 0 makes a key unlimited; "default" covers everyone else</span>
+<span class="cm"># budgets.json: 0 makes a key unlimited; "default" covers everyone else</span>
 { "team-search-x9f": 2000000, "team-agents-p7q": 500000, "default": 1000000 }</pre>
-    <p>Only tokens actually billed upstream count against a budget — cache hits and
+    <p>Only tokens actually billed upstream count against a budget; cache hits and
     coalesced items are free. Once a key's window is spent, requests that would trigger
     new computation are rejected with <code>429</code> and a <code>Retry-After</code>
     header pointing at the window reset.</p>
     <div class="note">
       <b>Budgets cap cost, not availability:</b> an exhausted key keeps getting cache
-      hits — its existing corpus and hot queries stay served while new spend is blocked.
+      hits; its existing corpus and hot queries stay served while new spend is blocked.
       A runaway agent burning its budget on novel inputs gets stopped; the production
       queries it already warmed keep working.
     </div>
@@ -262,7 +262,7 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
       <li>Every response to a limited key carries <code>X-Embedcache-Budget-Remaining</code>.</li>
       <li>Per-key state (limit, spent, reset) is on <code>/_ec/stats</code>; rejections
       export as <code>embedcache_budget_rejects_total</code>.</li>
-      <li>A request that starts under budget may finish over it — the overshoot counts and
+      <li>A request that starts under budget may finish over it; the overshoot counts and
       the next spend attempt is rejected. Counters are in-memory and reset at each window
       boundary and on restart.</li>
       <li>Anonymous callers (no key) share one budget bucket under the default limit.</li>
@@ -277,7 +277,7 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
     timeouts. After <code>-breaker-cooldown</code>, one probe decides whether to close it.</p>
     <div class="note">
       <b>The property that matters:</b> cache hits keep serving while the circuit is open.
-      A warmed embedcache acts as a read-through fallback during backend outages — the outage
+      A warmed embedcache acts as a read-through fallback during backend outages: the outage
       degrades misses, not the service.
     </div>
 
@@ -287,10 +287,10 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
       <li>The snapshot is loaded at start, written on graceful shutdown, every
       <code>-persist-interval</code>, and on demand via <code>POST /_ec/snapshot</code>.
       Writes are atomic (temp file + rename). A hard crash loses at most the entries since
-      the last snapshot — for a cache, that means a few extra misses, never wrong data.</li>
+      the last snapshot; for a cache that means a few extra misses, never wrong data.</li>
       <li><code>-ttl</code> bounds staleness. If your model files can change under the same
       model name (common with self-hosted fine-tune iterations), set a TTL or call
-      <code>/_ec/flush</code> on deploy — otherwise entries never expire, because for a
+      <code>/_ec/flush</code> on deploy; otherwise entries never expire, because for a
       fixed model the correct answer never changes.</li>
       <li>Memory: entries are bounded by <code>-max-entries</code> and
       <code>-max-memory-mb</code> with LRU eviction, sharded 16 ways.</li>
@@ -299,7 +299,7 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
     <h2 id="guarantees">Guarantees</h2>
     <ul>
       <li>A cache hit returns the byte-identical JSON value the upstream returned when the
-      entry was created — verified by fuzzing, at 430k-request scale, and across crash-restarts.</li>
+      entry was created, verified by fuzzing, at 430k-request scale, and across crash-restarts.</li>
       <li>Batch responses preserve input order and index mapping under any mix of hits,
       misses, and intra-batch duplicates.</li>
       <li>A unique input in flight is computed upstream at most once across all concurrent
@@ -312,10 +312,10 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
     <ul>
       <li><b>Fixed-size chunking defeats exact-match caching.</b> Slicing a document by byte
       offset means any edit shifts every downstream chunk, so a naive re-chunk re-embeds
-      everything — measured at 0% absorbed in
+      everything, measured at 0% absorbed in
       <a href="https://github.com/Ajay6601/embedcache/blob/main/EXPERIMENTS.md">E4</a>. Use
       <code>embedcache chunk</code> (content-defined chunking) instead: edits only perturb the
-      chunks they touch — <b>93.8%</b> absorbed on a real edit to a real article, see
+      chunks they touch: <b>93.8%</b> absorbed on a real edit to a real article, see
       <a href="https://github.com/Ajay6601/embedcache/blob/main/CHUNKDIFF.md">CHUNKDIFF.md</a>.</li>
       <li><b>Semantically similar ≠ identical.</b> "reset my password" and "how to reset
       password" are different entries. Opt-in normalization (<code>trim,collapse,lowercase</code>)
@@ -325,21 +325,21 @@ embedcache serve -upstream https://api.openai.com -auth-mode verify</pre>
       this matters.</li>
       <li><b>Your savings depend on your workload.</b> A real agent workload measured 49.7%
       duplicate tokens; yours may be more or less. That is exactly what
-      <code>embedcache analyze</code> is for — measure before you deploy.</li>
+      <code>embedcache analyze</code> is for: measure before you deploy.</li>
     </ul>
 
     <h2 id="faq">FAQ</h2>
     <h3>Why not semantic caching?</h3>
-    <p>Similarity-threshold caching returns <em>wrong answers</em> at some rate — published
+    <p>Similarity-threshold caching returns <em>wrong answers</em> at some rate; published
     evaluations show meaningful false-hit rates even at high thresholds. For embeddings
     specifically, wrong vectors silently poison your vector store. Exact-match has a 0%
     wrong-answer rate, and the analyzer proves how much it still saves.</p>
     <h3>Is it a library or a framework?</h3>
-    <p>Neither — it's a service, like Redis or nginx. Your apps in any language talk to it
+    <p>Neither: it's a service, like Redis or nginx. Your apps in any language talk to it
     over HTTP without importing anything. That's the point: LangChain and LlamaIndex already
     dedupe <em>inside Python</em>; embedcache does it for your whole stack.</p>
     <h3>What happens when embedcache itself dies?</h3>
-    <p>Point your clients at the upstream directly — the API is passthrough-compatible, so
+    <p>Point your clients at the upstream directly; the API is passthrough-compatible, so
     the failure mode is "you pay full price again," never "you're down." Restore from the
     snapshot when it's back.</p>
     <h3>Does it work with chat completions too?</h3>

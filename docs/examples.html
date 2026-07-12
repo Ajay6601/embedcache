@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Examples — embedcache</title>
+<title>Examples: embedcache</title>
 <meta name="description" content="Copy-paste recipes: Ollama, vLLM, OpenAI, Gemini, Docker, Kubernetes, Python, JavaScript, Go, LangChain, LlamaIndex, and ops workflows.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9889;</text></svg>">
 <link rel="stylesheet" href="style.css">
@@ -97,12 +97,12 @@ embedcache serve -upstream https://api.openai.com \
   -upstream https://generativelanguage.googleapis.com/v1beta/openai \
   -upstream-api-key $GEMINI_API_KEY</pre>
     <p>Set your client's <code>base_url</code> to <code>http://localhost:8090</code>
-    (without <code>/v1</code> — Google's compat endpoint uses bare <code>/embeddings</code>,
+    (without <code>/v1</code>, since Google's compat endpoint uses bare <code>/embeddings</code>,
     and embedcache mirrors the client path). Current embedding model:
-    <code>gemini-embedding-001</code> (3072 dims — at ~67&nbsp;KB per vector, every cache hit
+    <code>gemini-embedding-001</code> (3072 dims, so at ~67&nbsp;KB per vector, every cache hit
     also skips a full internet round-trip).</p>
 
-    <h2 id="voyage">Voyage AI — the Anthropic/Claude stack</h2>
+    <h2 id="voyage">Voyage AI: the Anthropic/Claude stack</h2>
     <p>Anthropic offers no embeddings API of its own and officially recommends
     <a href="https://docs.voyageai.com">Voyage AI</a>. Voyage's
     <code>/v1/embeddings</code> is wire-compatible, and its extra parameters are
@@ -129,7 +129,7 @@ curl localhost:8090/v1/embeddings -H "Content-Type: application/json" \
 
     <h2 id="azure">Azure OpenAI</h2>
     <p>Azure routes by deployment path and version query string, and authenticates with
-    an <code>api-key</code> header — embedcache mirrors all three:</p>
+    an <code>api-key</code> header, and embedcache mirrors all three:</p>
     <pre class="code">embedcache serve -upstream https://YOUR-RESOURCE.openai.azure.com
 
 <span class="cm"># client base_url points at the proxy with the full deployment path</span>
@@ -186,7 +186,7 @@ embeddings = OpenAIEmbeddings(
     model=<span class="st">"text-embedding-3-small"</span>,
 )
 <span class="cm"># every vectorstore .add_documents / .similarity_search now dedupes for free,</span>
-<span class="cm"># across every process and language that shares the proxy — not just this one</span></pre>
+<span class="cm"># across every process and language that shares the proxy, not just this one</span></pre>
 
     <h2 id="llamaindex">LlamaIndex</h2>
     <pre class="code"><span class="kw">from</span> llama_index.embeddings.openai <span class="kw">import</span> OpenAIEmbedding
@@ -273,14 +273,14 @@ Restart=on-failure
 WantedBy=multi-user.target</pre>
 
     <h2 id="audit">Workflow: audit your existing logs (no install in the request path)</h2>
-    <pre class="code"><span class="cm"># 1. dump embedding request bodies from whatever you have — gateway logs,</span>
-<span class="cm">#    app logs, LiteLLM logs — one JSON object per line</span>
+    <pre class="code"><span class="cm"># 1. dump embedding request bodies from whatever you have: gateway logs,</span>
+<span class="cm">#    app logs, LiteLLM logs, one JSON object per line</span>
 <span class="cm"># 2. run the analyzer</span>
 embedcache analyze -default-price 0.05 requests.jsonl
 
 <span class="cm"># machine-readable, for a dashboard or a slack bot</span>
 embedcache analyze -json requests.jsonl | jq '{rate: .duplicate_rate, wasted_usd: .wasted_usd_est}'</pre>
-    <p>The number it prints is the exact share an exact-match cache would have absorbed —
+    <p>The number it prints is the exact share an exact-match cache would have absorbed;
     the analyzer and the live proxy agreed to the item when validated on identical traffic.</p>
 
     <h2 id="production">Workflow: full production config</h2>
@@ -294,12 +294,12 @@ embedcache analyze -json requests.jsonl | jq '{rate: .duplicate_rate, wasted_usd
   -request-log  /var/log/embedcache/requests.jsonl \
   -pricing      /etc/embedcache/pricing.json
 
-<span class="cm"># pricing.json — give self-hosted models an amortized GPU cost so the</span>
+<span class="cm"># pricing.json: give self-hosted models an amortized GPU cost so the</span>
 <span class="cm"># waste report speaks in dollars:</span>
 { "bge-large-en-v1.5": 0.03, "default": 0.05 }</pre>
 
     <h2 id="modelswap">Workflow: redeploying a model under the same name</h2>
-    <pre class="code"><span class="cm"># cached vectors are only valid for the weights that produced them —</span>
+    <pre class="code"><span class="cm"># cached vectors are only valid for the weights that produced them,</span>
 <span class="cm"># flush on deploy, or run with -ttl as a safety net</span>
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/flush
 
@@ -325,7 +325,7 @@ embedcache serve -upstream http://localhost:8000 \
 <span class="cm"># per-caller usage shows up in stats (keys appear as short hashes)</span>
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" localhost:8090/_ec/stats \
   | jq .per_caller</pre>
-    <p>Every team shares one cache — team A's ingestion warms team B's queries — while
+    <p>Every team shares one cache (team A's ingestion warms team B's queries) while
     usage is attributed per key.</p>
 
     <p>Add hard budgets so a runaway agent can't burn the shared backend:</p>

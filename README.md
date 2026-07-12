@@ -58,7 +58,7 @@ Every number below comes from a real run in this repo - the workloads and edits 
 | A nightly re-ingest where 5% of a 10k-chunk corpus changed | **95.2%** of embedding calls absorbed ([EXPERIMENTS.md](EXPERIMENTS.md)) |
 | Re-ingesting a real doc after one real single-sentence edit, with chunk-diff | **93.8%** hit rate vs **28.6%** for fixed-size chunking ([CHUNKDIFF.md](CHUNKDIFF.md)) |
 | Search-shaped (Zipf) query traffic on a real corpus | **~80%** hit rate across six real models ([VALIDATION.md](VALIDATION.md)) |
-| Re-running a full BEIR SciFact eval (300 queries × 5,183 docs) the second time | **100%** absorbed — ~2s instead of ~25min, at **zero** quality change ([BENCHMARKS.md](BENCHMARKS.md)) |
+| Re-running a full BEIR SciFact eval (300 queries × 5,183 docs) the second time | **100%** absorbed, ~2s instead of ~25min, at **zero** quality change ([BENCHMARKS.md](BENCHMARKS.md)) |
 
 Your number depends on your traffic - which is exactly why `embedcache analyze` measures it on your own logs before you deploy anything.
 
@@ -77,21 +77,21 @@ embedcache does one thing, language-agnostically, and provably correctly. Eight 
 | [PERF.md](PERF.md) | honest open-loop (coordinated-omission-free) latency, p50→p99.9 | constant-rate load | real Ollama |
 | [MULTIAGENT.md](MULTIAGENT.md) | cross-agent reuse, coalescing under concurrency, mid-run budget cap, **cross-language cache sharing** | **live Wikipedia + real LLM + real Python/LangChain** | real Ollama |
 
-The multi-model suite deliberately surfaced real backend behaviors and shows embedcache handling each correctly rather than hiding them: Gemini is not bitwise-deterministic (embedcache stabilizes repeats to one vector), Gemini rate-limits under burst, small-context models reject oversized chunks, and the rough bytes/4 token estimator drifts on CJK/Arabic scripts (it only feeds the *analyzer's* estimate — billed spend is apportioned from the backend's exact reported total, never estimated) - none are cache defects.
+The multi-model suite deliberately surfaced real backend behaviors and shows embedcache handling each correctly rather than hiding them: Gemini is not bitwise-deterministic (embedcache stabilizes repeats to one vector), Gemini rate-limits under burst, small-context models reject oversized chunks, and the rough bytes/4 token estimator drifts on CJK/Arabic scripts (it only feeds the *analyzer's* estimate; billed spend is apportioned from the backend's exact reported total, never estimated). None of these are cache defects.
 
 | Correctness claim | Evidence |
 |---|---|
 | Byte-exact responses, correct batch index mapping | 3,453 randomized-batch embeddings, 0 mismatches - covers the LiteLLM [#22659](https://github.com/BerriAI/litellm/issues/22659) wrong-vector failure class; re-verified on 6 real models |
 | Zero retrieval-quality loss | nDCG@10 and Recall@100 on BEIR SciFact are **bit-identical** through the cache vs direct-to-backend; the top-10 ranking is unchanged for all 300 queries ([BENCHMARKS.md](BENCHMARKS.md)) |
 | Coalescing | 200 concurrent identical requests → 1 upstream computation; 800 overlapping batch items → 20 (the ideal); proven again across independent agent identities in [MULTIAGENT.md](MULTIAGENT.md) |
-| Negligible overhead | ~0.0 ms added p50 on a hit; cache hits serve at sub-ms p50 with p99.9 of 2.6–4.3ms; the proxy adds only 0.19–1.08ms over a real backend miss ([PERF.md](PERF.md)) |
+| Negligible overhead | ~0.0 ms added p50 on a hit; cache hits serve at sub-ms p50 with p99.9 of 2.6 to 4.3ms; the proxy adds only 0.19 to 1.08ms over a real backend miss ([PERF.md](PERF.md)) |
 | Waste report accuracy | offline analyzer found exactly the 17,948 duplicates the live cache absorbed on the same 20k-query workload |
 | Multimodal images | *honest boundary:* cache is content-agnostic (proven), but no OpenAI-`/v1/embeddings`-compatible image backend was reachable to live-test end-to-end - deferred to v0.3 |
 
 ## Install
 
 ```bash
-# prebuilt binary (Linux/macOS/Windows, amd64+arm64) — no Go needed
+# prebuilt binary (Linux/macOS/Windows, amd64+arm64), no Go needed
 # grab the archive for your platform from the releases page:
 #   https://github.com/Ajay6601/embedcache/releases
 
@@ -106,7 +106,7 @@ git clone https://github.com/Ajay6601/embedcache && cd embedcache
 go build -o embedcache ./cmd/embedcache
 ```
 
-**New here? See it work in one command — no upstream, no key, no config:**
+**New here? See it work in one command, with no upstream, no key, no config:**
 
 ```bash
 embedcache demo
@@ -209,17 +209,17 @@ embedcache serve -upstream http://localhost:8000 \
 
 ## Budgets
 
-Hard per-key limits on upstream spend — the enforcement half of the cost story:
+Hard per-key limits on upstream spend, the enforcement half of the cost story:
 
 ```bash
 embedcache serve -upstream http://localhost:8000 \
   -budgets-file budgets.json -budget-window 24h
 
-# budgets.json — tokens per key per window; 0 = unlimited, "default" applies to the rest
+# budgets.json: tokens per key per window; 0 = unlimited, "default" applies to the rest
 { "team-search-x9f": 2000000, "team-agents-p7q": 500000, "default": 1000000 }
 ```
 
-Budgets bound **spend, not reads**: only tokens actually billed upstream count, and once a key is exhausted, requests needing new computation get `429` (with `Retry-After` for the window reset) while **cache hits keep serving** — a capped team's existing workload stays alive; only new cost is blocked. Every response carries `X-Embedcache-Budget-Remaining` so clients can self-moderate, per-key state is on `/_ec/stats`, and rejections export as `embedcache_budget_rejects_total`. Counters are in-memory and reset at each window boundary (and on restart), like any in-process rate limiter.
+Budgets bound **spend, not reads**: only tokens actually billed upstream count, and once a key is exhausted, requests needing new computation get `429` (with `Retry-After` for the window reset) while **cache hits keep serving**, so a capped team's existing workload stays alive; only new cost is blocked. Every response carries `X-Embedcache-Budget-Remaining` so clients can self-moderate, per-key state is on `/_ec/stats`, and rejections export as `embedcache_budget_rejects_total`. Counters are in-memory and reset at each window boundary (and on restart), like any in-process rate limiter.
 
 ## Resilience
 
@@ -310,7 +310,7 @@ go test ./...                                          # unit + integration test
 go test -race ./...                                    # requires cgo (runs in CI)
 go run ./experiments/harness    -bin ./embedcache.exe  # regenerates EXPERIMENTS.md (mock; the CI gate)
 go run ./experiments/validate   -bin ./embedcache.exe  # regenerates VALIDATION.md (needs local Ollama models)
-go run ./experiments/benchmark  -bin ./embedcache.exe  # regenerates BENCHMARKS.md (needs the BEIR SciFact dataset — see experiments/benchmark/data/README.md)
+go run ./experiments/benchmark  -bin ./embedcache.exe  # regenerates BENCHMARKS.md (needs the BEIR SciFact dataset, see experiments/benchmark/data/README.md)
 go run ./experiments/perf       -bin ./embedcache.exe  # regenerates PERF.md
 go run ./experiments/multiagent -bin ./embedcache.exe  # regenerates MULTIAGENT.md (needs Ollama + python with langchain_core)
 ```
