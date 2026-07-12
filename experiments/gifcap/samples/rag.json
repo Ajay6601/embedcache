@@ -1,0 +1,109 @@
+[
+  {
+    "kind": "cmd",
+    "text": "rag-ingest.py  # embed 40 doc chunks via embedcache (nomic-embed-text)",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "ingested 40 chunks -\u003e 40 embedded upstream (cold cache)",
+    "color": "amber",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "rag-ingest.py  # nightly re-run, corpus unchanged",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "re-ingested 40 chunks -\u003e 0 embedded, 40 served from cache",
+    "color": "green",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "\u003e\u003e 100% absorbed - the nightly re-embed was almost entirely free",
+    "color": "mint",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "embedcache report",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "embedcache waste report (uptime 3s)",
+    "color": "dim"
+  },
+  {
+    "kind": "out",
+    "text": "================================================",
+    "color": "dim"
+  },
+  {
+    "kind": "out",
+    "text": "embedding requests     6   (passthrough: 0, errors: 0)"
+  },
+  {
+    "kind": "out",
+    "text": "embedding items        80"
+  },
+  {
+    "kind": "out",
+    "text": "  served from cache    40"
+  },
+  {
+    "kind": "out",
+    "text": "  coalesced in flight  0"
+  },
+  {
+    "kind": "out",
+    "text": "  sent upstream        40  (in 3 calls, 0 retries)"
+  },
+  {
+    "kind": "out",
+    "text": "hit rate               50.0%"
+  },
+  {
+    "kind": "out",
+    "text": "tokens paid upstream   2237   ($0.0000)"
+  },
+  {
+    "kind": "out",
+    "text": "tokens saved           2237   ($0.0000)",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "duplicate share        50.0% of embedding spend was duplicate work",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "cache                  40 entries, 0.4 MB"
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "out",
+    "text": "per model:"
+  },
+  {
+    "kind": "out",
+    "text": "  nomic-embed-text               items=80       hits=40       saved_tokens=2237",
+    "color": "amber",
+    "pause": 26
+  }
+]

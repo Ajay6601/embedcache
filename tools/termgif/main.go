@@ -8,12 +8,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
 	"os"
+	"strings"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gomono"
@@ -21,7 +23,13 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-var outPath = flag.String("out", "demo.gif", "output gif path")
+var (
+	outPath    = flag.String("out", "demo.gif", "output gif path")
+	transcript = flag.String("transcript", "", "JSON transcript captured from a real run; if set, renders that instead of the built-in demo")
+	titleText  = flag.String("title", "embedcache", "title-bar caption")
+	widthFlag  = flag.Int("width", 760, "gif width in px")
+	heightFlag = flag.Int("height", 460, "gif height in px")
+)
 
 var (
 	bg    = color.RGBA{0x0b, 0x0f, 0x14, 0xff}
@@ -39,9 +47,12 @@ var (
 
 var palette = color.Palette{bg, barBg, text, dim, green, mint, amber, cyan, red, ylw, grn2}
 
+var (
+	width  = 760
+	height = 460
+)
+
 const (
-	width   = 760
-	height  = 460
 	marginX = 22
 	topY    = 58 // below the title bar
 	lineH   = 19
@@ -54,54 +65,138 @@ type span struct {
 }
 type row []span
 
-func cmd(s string) row  { return row{{"$ ", green}, {s, text}} }
-func out(s string) row  { return row{{s, text}} }
-func dimr(s string) row { return row{{s, dim}} }
+// wrapRow splits a row into as many visual lines as it takes to fit maxChars,
+// breaking at spaces where possible, the way a real terminal soft-wraps. Colors
+// are preserved across the break.
+func wrapRow(r row, maxChars int) []row {
+	type rc struct {
+		ch  rune
+		col color.RGBA
+	}
+	var flat []rc
+	for _, s := range r {
+		for _, ch := range s.text {
+			flat = append(flat, rc{ch, s.col})
+		}
+	}
+	if maxChars <= 0 || len(flat) <= maxChars {
+		return []row{r}
+	}
+	var out []row
+	for start := 0; start < len(flat); {
+		end := start + maxChars
+		if end >= len(flat) {
+			end = len(flat)
+		} else {
+			// prefer breaking at a space in the last third of the line
+			for b := end; b > start+maxChars*2/3; b-- {
+				if flat[b-1].ch == ' ' {
+					end = b
+					break
+				}
+			}
+		}
+		var rr row
+		for i := start; i < end; i++ {
+			if len(rr) > 0 && rr[len(rr)-1].col == flat[i].col {
+				rr[len(rr)-1].text += string(flat[i].ch)
+			} else {
+				rr = append(rr, span{string(flat[i].ch), flat[i].col})
+			}
+		}
+		out = append(out, rr)
+		start = end
+	}
+	return out
+}
 
-// the demo script: the waste report, the product's money shot
+// a step is one line of the session, rendered from a real captured transcript.
 type step struct {
 	r      row
 	typing bool // reveal char by char
 	pause  int  // extra hold frames after the row completes
 }
 
-func script() []step {
-	return []step{
-		{r: cmd("embedcache analyze requests.jsonl"), typing: true, pause: 6},
-		{r: out("embedcache offline waste analysis")},
-		{r: out("=================================")},
-		{r: out("requests analyzed        20000")},
-		{r: out("embedding items          20000")},
-		{r: out("unique items             2052"), pause: 2},
-		{r: row{{"duplicate items          ", text}, {"17948   (89.7% of all items)", amber}}, pause: 3},
-		{r: out("estimated tokens         340217   (~$44.23)")},
-		{r: row{{"estimated wasted tokens  ", text}, {"305090   (~$39.66)", amber}}, pause: 5},
-		{r: out("")},
-		{r: row{{">> 89.7% of this embedding spend was duplicate work", mint}}},
-		{r: row{{">> an exact-match cache would have absorbed.", mint}}, pause: 6},
-		{r: out("")},
-		{r: out("top duplicated inputs:")},
-		{r: row{{"  4831x  ", cyan}, {`tokens=7    "how do I reset my password"`, text}}},
-		{r: row{{"  2210x  ", cyan}, {`tokens=4    "pricing plans"`, text}}},
-		{r: row{{"  1187x  ", cyan}, {`tokens=9    "cancel my subscription"`, text}}, pause: 8},
-		{r: out("")},
-		{r: cmd("embedcache serve -upstream http://localhost:11434"), typing: true, pause: 4},
-		{r: dimr("embedcache listening on :8090 -> ollama, remembering everything"), pause: 24},
+// transcriptEvent is one line captured from a real embedcache run. The capture
+// harness (tools/gifcap) actually executes the commands against real backends
+// and records their real output into these events; termgif only replays them.
+type transcriptEvent struct {
+	Kind  string `json:"kind"`            // cmd | out | dim
+	Text  string `json:"text"`            // the literal line captured
+	Color string `json:"color,omitempty"` // optional emphasis: green|mint|amber|cyan|red|dim
+	Pause int    `json:"pause,omitempty"` // extra hold frames after the line
+}
+
+func colorByName(name string) color.RGBA {
+	switch name {
+	case "green":
+		return green
+	case "mint":
+		return mint
+	case "amber":
+		return amber
+	case "cyan":
+		return cyan
+	case "red":
+		return red
+	case "dim":
+		return dim
+	default:
+		return text
 	}
+}
+
+func scriptFromTranscript(path string) []step {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	var events []transcriptEvent
+	if err := json.Unmarshal(raw, &events); err != nil {
+		fmt.Fprintln(os.Stderr, "parsing transcript:", err)
+		os.Exit(1)
+	}
+	var steps []step
+	for _, e := range events {
+		var r row
+		switch e.Kind {
+		case "cmd":
+			r = row{{"$ ", green}, {e.Text, text}}
+			steps = append(steps, step{r: r, typing: true, pause: e.Pause})
+			continue
+		case "dim":
+			r = row{{e.Text, dim}}
+		default: // out
+			// allow a colored prefix marker like "hit:" / "miss:" by coloring the
+			// whole captured line when a color is given
+			r = row{{e.Text, colorByName(e.Color)}}
+		}
+		steps = append(steps, step{r: r, pause: e.Pause})
+	}
+	return steps
 }
 
 func main() {
 	flag.Parse()
+	if *transcript == "" {
+		fmt.Fprintln(os.Stderr, "termgif renders a real captured transcript; pass -transcript <file.json>")
+		fmt.Fprintln(os.Stderr, "capture one with e.g.: go run ./experiments/gifcap -scenario serve -upstream http://localhost:11434 -out serve.json")
+		os.Exit(2)
+	}
+	width, height = *widthFlag, *heightFlag
 	face := loadFace()
+	maxChars := (width - 2*marginX) / textWidth(face, "M")
 
 	var frames []*image.Paletted
 	var rows []row
 
 	render := func(partial *row) {
-		frames = append(frames, drawFrame(face, rows, partial))
+		frames = append(frames, drawFrame(face, rows, partial, maxChars))
 	}
 
-	for _, st := range script() {
+	steps := scriptFromTranscript(*transcript)
+	for _, st := range steps {
 		if st.typing {
 			// reveal the command 3 chars per frame
 			full := st.r[len(st.r)-1].text
@@ -118,10 +213,10 @@ func main() {
 		for i := 0; i < st.pause; i++ {
 			render(nil)
 		}
-		// scroll if we run out of vertical space
+		// scroll if we run out of vertical space, counting wrapped visual lines
 		maxRows := (height - topY - 14) / lineH
-		if len(rows) > maxRows {
-			rows = rows[len(rows)-maxRows:]
+		for visualLines(rows, maxChars) > maxRows && len(rows) > 1 {
+			rows = rows[1:]
 		}
 	}
 	// final hold
@@ -169,7 +264,15 @@ func loadFace() font.Face {
 	return face
 }
 
-func drawFrame(face font.Face, rows []row, partial *row) *image.Paletted {
+func visualLines(rows []row, maxChars int) int {
+	n := 0
+	for _, r := range rows {
+		n += len(wrapRow(r, maxChars))
+	}
+	return n
+}
+
+func drawFrame(face font.Face, rows []row, partial *row, maxChars int) *image.Paletted {
 	img := image.NewPaletted(image.Rect(0, 0, width, height), palette)
 	fill(img, image.Rect(0, 0, width, height), bg)
 	// title bar
@@ -177,10 +280,10 @@ func drawFrame(face font.Face, rows []row, partial *row) *image.Paletted {
 	circle(img, 20, 17, 6, red)
 	circle(img, 40, 17, 6, ylw)
 	circle(img, 60, 17, 6, grn2)
-	drawText(img, face, 80, 22, "embedcache", dim)
+	drawText(img, face, 80, 22, strings.TrimSpace(*titleText), dim)
 
 	y := topY
-	for _, r := range rows {
+	drawRow := func(r row) {
 		x := marginX
 		for _, s := range r {
 			drawText(img, face, x, y, s.text, s.col)
@@ -188,14 +291,26 @@ func drawFrame(face font.Face, rows []row, partial *row) *image.Paletted {
 		}
 		y += lineH
 	}
-	if partial != nil {
-		x := marginX
-		for _, s := range *partial {
-			drawText(img, face, x, y, s.text, s.col)
-			x += textWidth(face, s.text)
+	for _, r := range rows {
+		for _, vl := range wrapRow(r, maxChars) {
+			drawRow(vl)
 		}
-		// cursor block
-		fill(img, image.Rect(x+1, y-11, x+9, y+3), green)
+	}
+	if partial != nil {
+		wrapped := wrapRow(*partial, maxChars)
+		for i, vl := range wrapped {
+			if i < len(wrapped)-1 {
+				drawRow(vl)
+				continue
+			}
+			// last visual line: draw it and place the cursor after it
+			x := marginX
+			for _, s := range vl {
+				drawText(img, face, x, y, s.text, s.col)
+				x += textWidth(face, s.text)
+			}
+			fill(img, image.Rect(x+1, y-11, x+9, y+3), green)
+		}
 	} else if len(rows) > 0 {
 		fill(img, image.Rect(marginX+1, y-11, marginX+9, y+3), green)
 	}

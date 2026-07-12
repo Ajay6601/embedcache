@@ -1,0 +1,62 @@
+[
+  {
+    "kind": "dim",
+    "text": "one research crew, five agents, each with its own API key, one shared embedcache",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "worker-1  embed(\"how do vector databases enable ret...\")",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "X-Embedcache-Status: miss   worker-1 computes it once",
+    "color": "amber",
+    "pause": 4
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "worker-2  embed(\"how do vector databases enable ret...\")   # same sub-question, different agent",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "X-Embedcache-Status: hit    worker-2 reuses it free (11 tokens saved)",
+    "color": "green",
+    "pause": 3
+  },
+  {
+    "kind": "dim",
+    "text": "different agent, different key, same content -\u003e one upstream call",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "worker-3  embed(novel inputs...)   # key capped at 40 tokens",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "HTTP 429 Too Many Requests   worker-3 hit its 40-token budget",
+    "color": "amber",
+    "pause": 4
+  },
+  {
+    "kind": "dim",
+    "text": "planner-key still served normally (HTTP 200, miss) - only the runaway agent is capped",
+    "pause": 26
+  }
+]

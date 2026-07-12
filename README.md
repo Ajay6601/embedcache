@@ -2,7 +2,7 @@
 
 **[Website](https://ajay6601.github.io/embedcache/) · [Documentation](https://ajay6601.github.io/embedcache/docs.html) · [Examples](https://ajay6601.github.io/embedcache/examples.html)**
 
-![embedcache demo - the offline waste analyzer finding duplicate embedding spend](docs/assets/demo.gif)
+![embedcache serving a real miss, then a real hit, in front of real Ollama](docs/assets/ollama.gif)
 
 **The cost-control and dedupe layer for embedding APIs.** A single-binary proxy that sits in front of any OpenAI-compatible embedding backend - vLLM, Ollama, text-embeddings-inference, or api.openai.com - and eliminates duplicate work before it reaches your GPUs or your API bill. Then it hands you the invoice for what it saved.
 
@@ -27,6 +27,22 @@ You run embedcache as a service (like nginx or Redis - not a library you import)
 4. **Account** - live per-model and per-caller spend/savings on `/_ec/stats`, `/metrics` (Prometheus), and a human `report`.
 
 Typical users: platform/ML-infra teams past ~10M embedding tokens/day running vLLM/Ollama plus an API fallback; RAG and agent teams re-embedding corpora and burning tokens in loops.
+
+## See it running
+
+Every clip below is a real capture: the commands actually ran, against real backends, and the statuses, latencies, and numbers on screen are what the live proxy returned (recorded by `experiments/gifcap`, rendered by `tools/termgif`, transcripts under `experiments/gifcap/samples/`). The one at the top is embedcache in front of real Ollama, serving a real miss then a real hit.
+
+**RAG: a nightly re-ingest, nothing changed, so nothing is recomputed** ([REALTEST.md](REALTEST.md))
+
+![real RAG re-ingest against Ollama, 100% absorbed on the second pass](docs/assets/rag.gif)
+
+**Agents: two agents with different keys share one cache, and a capped agent is stopped mid-run** ([MULTIAGENT.md](MULTIAGENT.md))
+
+![real multi-agent run: cross-agent cache hit and a real 429 budget rejection](docs/assets/agents.gif)
+
+**CLI: point the offline analyzer at a real request log and see your duplicate spend** ([the waste report](#the-waste-report))
+
+![real embedcache analyze on a real request log showing 50% duplicate work](docs/assets/cli.gif)
 
 ## What's in v0.2.0
 

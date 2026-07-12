@@ -38,10 +38,9 @@
       <a class="btn ghost" href="#waste-report">See the waste report</a>
     </div>
 
-    <div class="term">
-      <div class="bar"><i></i><i></i><i></i><span>embedcache serve</span></div>
-      <pre id="term-serve"></pre>
-    </div>
+    <img class="shot" src="assets/ollama.gif" loading="lazy"
+         alt="embedcache in front of real Ollama: a real miss, then a real byte-exact hit"
+         style="width:100%;border-radius:12px;border:1px solid rgba(255,255,255,0.08);margin-top:1.2rem">
   </div>
 
   <div class="stats">
@@ -58,10 +57,9 @@
       input and tells you exactly how much of your embedding spend was duplicates.
       No proxy in the request path, no risk, just the number.
     </p>
-    <div class="term" style="margin-top:0">
-      <div class="bar"><i></i><i></i><i></i><span>embedcache analyze</span></div>
-      <pre id="term-analyze"></pre>
-    </div>
+    <img class="shot" src="assets/cli.gif" loading="lazy"
+         alt="embedcache analyze on a real request log, reporting 50% duplicate work"
+         style="width:100%;border-radius:12px;border:1px solid rgba(255,255,255,0.08)">
   </section>
 
   <section class="block">
@@ -80,6 +78,26 @@
         <h3>Account for everything</h3>
         <p>Every hit, miss, token, and dollar is tracked per model and per API key: live waste report, JSON stats, Prometheus metrics.</p>
       </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Real runs, not mockups</h2>
+    <p class="lead">Both clips below were captured from live runs against real Ollama. The numbers on
+    screen are what the proxy actually returned, not a script.</p>
+    <div class="grid3">
+      <figure style="margin:0">
+        <img class="shot" src="assets/rag.gif" loading="lazy"
+             alt="real RAG re-ingest against Ollama: the second pass is 100% absorbed"
+             style="width:100%;border-radius:12px;border:1px solid rgba(255,255,255,0.08)">
+        <figcaption style="margin-top:.5rem;opacity:.75">RAG: a nightly re-ingest recomputes nothing when the corpus has not changed.</figcaption>
+      </figure>
+      <figure style="margin:0">
+        <img class="shot" src="assets/agents.gif" loading="lazy"
+             alt="real multi-agent run: a cross-agent cache hit and a real 429 budget rejection"
+             style="width:100%;border-radius:12px;border:1px solid rgba(255,255,255,0.08)">
+        <figcaption style="margin-top:.5rem;opacity:.75">Agents: two keys share one cache; a capped agent is stopped mid-run, its siblings unaffected.</figcaption>
+      </figure>
     </div>
   </section>
 
@@ -131,37 +149,5 @@ client.embeddings.create(model=<span class="st">"text-embedding-3-small"</span>,
   </div>
 </footer>
 
-<script src="term.js"></script>
-<script>
-playTerminal("term-serve", [
-  { cmd: "embedcache serve -upstream http://localhost:11434" },
-  { html: '<span class="c-dim">embedcache 0.2.0 listening on :8090 -> http://localhost:11434</span>', pause: 700 },
-  { cmd: "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":\"how do I reset my password\"}'", pause: 500 },
-  { html: '<span class="c-amber">&lt; X-Embedcache-Status: miss</span>   <span class="c-dim">(computed by your GPU, now remembered)</span>', pause: 900 },
-  { cmd: "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":\"how do I reset my password\"}'", pause: 400 },
-  { html: '<span class="c-green">&lt; X-Embedcache-Status: hit</span>    <span class="c-dim">byte-exact replay</span>', pause: 100 },
-  { html: '<span class="c-green">&lt; X-Embedcache-Saved-Tokens: 7</span> <span class="c-dim">usage.prompt_tokens: 0, this one was free</span>', pause: 1400 },
-], { holdMs: 6000 });
-
-playTerminal("term-analyze", [
-  { cmd: "embedcache analyze requests.jsonl", pause: 600 },
-  { out: "embedcache offline waste analysis" },
-  { out: "=================================" },
-  { out: "requests analyzed        20000" },
-  { out: "embedding items          20000" },
-  { out: "unique items             2052" },
-  { html: 'duplicate items          <span class="c-amber">17948   (89.7% of all items)</span>' },
-  { out: "estimated tokens         340217   (~$44.23)" },
-  { html: 'estimated wasted tokens  <span class="c-amber">305090   (~$39.66)</span>', pause: 500 },
-  { out: "" },
-  { html: '<span class="c-green">&gt;&gt; 89.7% of this embedding spend was duplicate work an exact-match</span>' },
-  { html: '<span class="c-green">&gt;&gt; cache would have absorbed.</span>', pause: 600 },
-  { out: "" },
-  { out: "top duplicated inputs:" },
-  { html: '  <span class="c-cyan">4831x</span>  tokens=7    "how do I reset my password"' },
-  { html: '  <span class="c-cyan">2210x</span>  tokens=4    "pricing plans"' },
-  { html: '  <span class="c-cyan">1187x</span>  tokens=9    "cancel my subscription"', pause: 1500 },
-], { holdMs: 7000 });
-</script>
 </body>
 </html>

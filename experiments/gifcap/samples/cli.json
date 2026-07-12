@@ -1,0 +1,119 @@
+[
+  {
+    "kind": "cmd",
+    "text": "embedcache analyze -default-price 0.05 requests.jsonl",
+    "pause": 4
+  },
+  {
+    "kind": "out",
+    "text": "embedcache offline waste analysis"
+  },
+  {
+    "kind": "out",
+    "text": "=================================",
+    "color": "dim"
+  },
+  {
+    "kind": "out",
+    "text": "requests analyzed        6"
+  },
+  {
+    "kind": "out",
+    "text": "embedding items          80"
+  },
+  {
+    "kind": "out",
+    "text": "unique items             40"
+  },
+  {
+    "kind": "out",
+    "text": "duplicate items          40   (50.0% of all items)",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "estimated tokens         5722   (~$0.00)"
+  },
+  {
+    "kind": "out",
+    "text": "estimated wasted tokens  2861   (~$0.00)",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "out",
+    "text": "\u003e\u003e 50.0% of this embedding spend was duplicate work an exact-match",
+    "color": "mint"
+  },
+  {
+    "kind": "out",
+    "text": "\u003e\u003e cache would have absorbed.",
+    "color": "mint"
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "out",
+    "text": "per model:"
+  },
+  {
+    "kind": "out",
+    "text": "  nomic-embed-text               items=80       dup=40       wasted_tokens=2861       wasted=$0.00",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "out",
+    "text": "top duplicated inputs:",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"Retrieval-augmented generation (RAG) enhances large langu...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"In natural language processing, a word embedding is a rep...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"By redesigning the language model with the retriever in m...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"LLMs with RAG are programmed to prioritize new informatio...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"An especially common use-case for vector databases is in ...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"RAG systems may retrieve factually correct but misleading...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"RAG improves LLMs by incorporating information retrieval ...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"Vector embeddings are mathematical representations of dat...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"Retrieval-augmented generation (RAG) is a technique that ...\""
+  },
+  {
+    "kind": "out",
+    "text": "     2x  nomic-embed-text tokens=100     \"A vector database, vector store or vector search engine i...\"",
+    "pause": 26
+  }
+]

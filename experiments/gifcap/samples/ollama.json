@@ -1,0 +1,137 @@
+[
+  {
+    "kind": "cmd",
+    "text": "embedcache serve -upstream http://localhost:11434",
+    "pause": 3
+  },
+  {
+    "kind": "dim",
+    "text": "embedcache 0.2.0 listening on 127.0.0.1:8090 -\u003e http://localhost:11434 (normalize=\"\")",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":\"how do I reset my password\"}'",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "X-Embedcache-Status: miss  computed upstream in 55 ms",
+    "color": "amber",
+    "pause": 5
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":\"how do I reset my password\"}'",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "X-Embedcache-Status: hit   served in 0 ms, billed 0 tokens (saved 8)",
+    "color": "green",
+    "pause": 2
+  },
+  {
+    "kind": "dim",
+    "text": "(same vector, served from memory instead of the GPU, and free)",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "curl localhost:8090/v1/embeddings -d '{\"model\":\"all-minilm\",\"input\":[\"how do I reset my password\",\"reset my 2FA device\",\"update billing email\"]}'",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "X-Embedcache-Status: partial  1 served from cache, 2 computed",
+    "color": "cyan",
+    "pause": 6
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "cmd",
+    "text": "embedcache report",
+    "pause": 3
+  },
+  {
+    "kind": "out",
+    "text": "embedcache waste report (uptime 0s)",
+    "color": "dim"
+  },
+  {
+    "kind": "out",
+    "text": "================================================",
+    "color": "dim"
+  },
+  {
+    "kind": "out",
+    "text": "embedding requests     3   (passthrough: 0, errors: 0)"
+  },
+  {
+    "kind": "out",
+    "text": "embedding items        5"
+  },
+  {
+    "kind": "out",
+    "text": "  served from cache    2"
+  },
+  {
+    "kind": "out",
+    "text": "  coalesced in flight  0"
+  },
+  {
+    "kind": "out",
+    "text": "  sent upstream        3  (in 2 calls, 0 retries)"
+  },
+  {
+    "kind": "out",
+    "text": "hit rate               40.0%"
+  },
+  {
+    "kind": "out",
+    "text": "tokens paid upstream   20   ($0.0000)"
+  },
+  {
+    "kind": "out",
+    "text": "tokens saved           16   ($0.0000)",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "duplicate share        44.4% of embedding spend was duplicate work",
+    "color": "amber"
+  },
+  {
+    "kind": "out",
+    "text": "cache                  3 entries, 0.0 MB"
+  },
+  {
+    "kind": "out",
+    "text": ""
+  },
+  {
+    "kind": "out",
+    "text": "per model:"
+  },
+  {
+    "kind": "out",
+    "text": "  all-minilm                     items=5        hits=2        saved_tokens=16",
+    "color": "amber",
+    "pause": 26
+  }
+]
