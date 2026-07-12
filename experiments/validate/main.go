@@ -427,8 +427,8 @@ func scenarioMixedLanguageAttribution(p *proxy, b backend, corpora map[string][]
 // (U+0301) — that real multilingual pipelines mix routinely (e.g. macOS
 // filesystems and some tokenizers normalize to NFD, most web text is NFC).
 func scenarioUnicodeNormalization(p *proxy, b backend) {
-	nfc := "the café on the corner serves excellent coffee"     // é = U+00E9, precomposed
-	nfd := "the café on the corner serves excellent coffee"    // e + U+0301, decomposed
+	nfc := "the café on the corner serves excellent coffee"  // é = U+00E9, precomposed
+	nfd := "the café on the corner serves excellent coffee" // e + U+0301, decomposed
 	if nfc == nfd {
 		return // shouldn't happen, but don't report a false finding
 	}
