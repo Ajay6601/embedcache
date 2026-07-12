@@ -262,6 +262,19 @@ func main() {
 			line("")
 			line("- proxy overhead at p50 (miss vs direct, both real upstream compute): %.2fms", overhead)
 		}
+
+		// persist the calibrated sustainable throughput too — the miss vs hit
+		// gap is the "how much faster is a cached answer than recomputing" number
+		line("")
+		line("| sustainable throughput (calibrated, closed-loop) | req/s |")
+		line("|---|---|")
+		line("| backend miss (real compute) | %.0f |", missRate)
+		line("| direct to backend (no proxy) | %.0f |", directRate)
+		line("| **cache hit** | **%.0f** |", hitRate)
+		if missRate > 0 {
+			line("")
+			line("- a cache hit serves **%.0f×** faster than the backend computes a miss", hitRate/missRate)
+		}
 	}
 
 	section("Method")

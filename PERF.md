@@ -1,6 +1,6 @@
 # embedcache open-loop latency benchmark
 
-Generated 2026-07-12 08:17 EDT · windows/amd64 · 16 CPUs · real local Ollama backend, no synthetic timing.
+Generated 2026-07-12 08:49 EDT · windows/amd64 · 16 CPUs · real local Ollama backend, no synthetic timing.
 
 Constant-rate (open-loop) load: a ticker schedules request dispatch on a fixed
 schedule regardless of completion, so tail latency under saturation is captured
@@ -10,31 +10,55 @@ honestly instead of being hidden by a closed-loop worker pool (coordinated omiss
 
 | scenario | target rate | completed | errors | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| miss (real compute, unique input) | 93/s | 1121 | 0 | 35.5ms | 40.3ms | 96.0ms | 108.8ms |
-| hit (cached, repeated input) | 4000/s | 20755 | 0 | 0.0ms | 0.0ms | 0.8ms | 2.6ms |
-| direct to backend (no proxy) | 93/s | 1118 | 0 | 34.5ms | 38.0ms | 67.7ms | 90.9ms |
+| miss (real compute, unique input) | 95/s | 1138 | 0 | 34.2ms | 38.5ms | 83.1ms | 91.1ms |
+| hit (cached, repeated input) | 4000/s | 21007 | 0 | 0.0ms | 0.0ms | 0.6ms | 2.4ms |
+| direct to backend (no proxy) | 96/s | 1153 | 0 | 34.6ms | 39.4ms | 76.2ms | 88.3ms |
 
-- proxy overhead at p50 (miss vs direct, both real upstream compute): 1.08ms
+- proxy overhead at p50 (miss vs direct, both real upstream compute): -0.44ms
+
+| sustainable throughput (calibrated, closed-loop) | req/s |
+|---|---|
+| backend miss (real compute) | 136 |
+| direct to backend (no proxy) | 137 |
+| **cache hit** | **9234** |
+
+- a cache hit serves **68×** faster than the backend computes a miss
 
 ## nomic-embed-text (768-dim)
 
 | scenario | target rate | completed | errors | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| miss (real compute, unique input) | 32/s | 378 | 0 | 48.2ms | 52.1ms | 72.6ms | 90.7ms |
-| hit (cached, repeated input) | 3793/s | 21399 | 0 | 0.0ms | 0.0ms | 1.1ms | 2.6ms |
-| direct to backend (no proxy) | 32/s | 382 | 1 | 48.0ms | 53.7ms | 87.5ms | 91.2ms |
+| miss (real compute, unique input) | 34/s | 405 | 0 | 47.2ms | 50.0ms | 61.7ms | 83.8ms |
+| hit (cached, repeated input) | 3403/s | 20698 | 0 | 0.0ms | 0.0ms | 1.2ms | 2.9ms |
+| direct to backend (no proxy) | 33/s | 397 | 3 | 46.2ms | 50.0ms | 68.4ms | 85.3ms |
 
-- proxy overhead at p50 (miss vs direct, both real upstream compute): 0.19ms
+- proxy overhead at p50 (miss vs direct, both real upstream compute): 1.08ms
+
+| sustainable throughput (calibrated, closed-loop) | req/s |
+|---|---|
+| backend miss (real compute) | 48 |
+| direct to backend (no proxy) | 48 |
+| **cache hit** | **4861** |
+
+- a cache hit serves **101×** faster than the backend computes a miss
 
 ## mxbai-embed-large (1024-dim)
 
 | scenario | target rate | completed | errors | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| miss (real compute, unique input) | 12/s | 138 | 0 | 79.3ms | 87.8ms | 100.6ms | 102.3ms |
-| hit (cached, repeated input) | 1701/s | 19472 | 0 | 0.0ms | 0.0ms | 1.2ms | 4.3ms |
-| direct to backend (no proxy) | 13/s | 150 | 0 | 79.1ms | 102.6ms | 283.0ms | 286.2ms |
+| miss (real compute, unique input) | 12/s | 138 | 0 | 79.6ms | 86.8ms | 104.3ms | 110.4ms |
+| hit (cached, repeated input) | 1409/s | 16406 | 0 | 0.0ms | 0.0ms | 1.1ms | 2.8ms |
+| direct to backend (no proxy) | 13/s | 146 | 0 | 79.1ms | 89.8ms | 293.2ms | 402.8ms |
 
-- proxy overhead at p50 (miss vs direct, both real upstream compute): 0.28ms
+- proxy overhead at p50 (miss vs direct, both real upstream compute): 0.50ms
+
+| sustainable throughput (calibrated, closed-loop) | req/s |
+|---|---|
+| backend miss (real compute) | 17 |
+| direct to backend (no proxy) | 19 |
+| **cache hit** | **2013** |
+
+- a cache hit serves **122×** faster than the backend computes a miss
 
 ## Method
 
