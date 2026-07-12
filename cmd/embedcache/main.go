@@ -4,12 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +25,7 @@ import (
 	"github.com/Ajay6601/embedcache/internal/cache"
 	"github.com/Ajay6601/embedcache/internal/chunker"
 	"github.com/Ajay6601/embedcache/internal/fingerprint"
+	"github.com/Ajay6601/embedcache/internal/mockllm"
 	"github.com/Ajay6601/embedcache/internal/pricing"
 	"github.com/Ajay6601/embedcache/internal/proxy"
 	"github.com/Ajay6601/embedcache/internal/server"
@@ -47,6 +50,10 @@ func main() {
 		err = runReport(os.Args[2:])
 	case "chunk":
 		err = runChunk(os.Args[2:])
+	case "demo":
+		err = runDemo(os.Args[2:])
+	case "check":
+		err = runCheck(os.Args[2:])
 	case "version":
 		fmt.Println("embedcache", version)
 	case "help", "-h", "--help":
@@ -67,10 +74,14 @@ func usage() {
 
 usage:
   embedcache serve   -upstream URL [flags]   run the caching proxy
+  embedcache demo    [flags]                 zero-setup walkthrough against a built-in mock backend
+  embedcache check   -upstream URL [flags]   probe a backend and print the flags to serve it
   embedcache analyze [flags] [file ...]      offline waste report from JSONL request logs (or stdin)
   embedcache report  [-addr URL]             fetch the live waste report from a running proxy
   embedcache chunk   [flags] [file]          split a file into content-defined chunks (stdin if no file)
   embedcache version
+
+new here? run "embedcache demo" first — no upstream, no API key, no config needed.
 
 run "embedcache serve -h", "embedcache analyze -h", or "embedcache chunk -h" for flags.
 `)
@@ -375,6 +386,190 @@ func runChunk(args []string) error {
 		}{c.Hash, len(c.Data), string(c.Data)}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// runDemo runs embedcache against a built-in deterministic mock embedding
+// backend (internal/mockllm) so a newcomer can see miss/hit/partial/waste-report
+// behavior in one command, with zero external setup: no Ollama, no API key,
+// no config file. The mock backend produces a real HTTP response over a real
+// loopback connection through the real proxy code path — nothing here is
+// faked at the proxy layer, only the "model" behind it is a stand-in.
+func runDemo(args []string) error {
+	fs := flag.NewFlagSet("demo", flag.ExitOnError)
+	listen := fs.String("listen", "127.0.0.1:8090", "address for the demo proxy to listen on")
+	fs.Parse(args)
+
+	mock := mockllm.New(256)
+	mockLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	go http.Serve(mockLn, mock.Handler())
+	mockBase := "http://" + mockLn.Addr().String()
+
+	up, err := upstream.New(mockBase, "", 30*time.Second)
+	if err != nil {
+		return err
+	}
+	c := cache.New(0, 0)
+	st := stats.New()
+	p := proxy.New(c, up, st, fingerprint.Normalizer{})
+	websrv := server.New(p, st, pricing.Default(), up.Base)
+
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w (pass -listen to use a different port)", *listen, err)
+	}
+	go http.Serve(ln, websrv.Handler())
+	base := "http://" + ln.Addr().String()
+
+	fmt.Println("embedcache demo — proxying a built-in mock embedding model, nothing external required")
+	fmt.Println("proxy listening on", base)
+	fmt.Println()
+
+	fmt.Println("1. a new input — expect a cache MISS (real compute against the mock model):")
+	demoEmbed(base, "the quick brown fox jumps over the lazy dog")
+	fmt.Println()
+
+	fmt.Println("2. the exact same input again — expect a cache HIT (no upstream call):")
+	demoEmbed(base, "the quick brown fox jumps over the lazy dog")
+	fmt.Println()
+
+	fmt.Println("3. a batch of 3 inputs, one repeated + two new — expect PARTIAL:")
+	demoEmbedBatch(base, []string{
+		"the quick brown fox jumps over the lazy dog",
+		"a sentence nobody has embedded before",
+		"another brand new sentence for the cache",
+	})
+	fmt.Println()
+
+	fmt.Println("4. the live waste report:")
+	if resp, err := http.Get(base + "/_ec/report"); err == nil {
+		io.Copy(os.Stdout, resp.Body)
+		resp.Body.Close()
+	}
+
+	fmt.Println()
+	fmt.Println("the demo proxy keeps running — try it yourself:")
+	fmt.Printf("  curl %s/v1/embeddings -d '{\"model\":\"demo\",\"input\":\"hello world\"}'\n", base)
+	fmt.Printf("  curl %s/_ec/stats\n", base)
+	fmt.Println("press Ctrl+C to stop.")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	<-ctx.Done()
+	return nil
+}
+
+func demoEmbed(base, input string) {
+	start := time.Now()
+	body, _ := json.Marshal(map[string]any{"model": "demo", "input": input})
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/embeddings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	fmt.Printf("   -> %s in %s (X-Embedcache-Status: %s)\n", resp.Status, time.Since(start).Round(time.Millisecond), resp.Header.Get("X-Embedcache-Status"))
+}
+
+func demoEmbedBatch(base string, inputs []string) {
+	start := time.Now()
+	body, _ := json.Marshal(map[string]any{"model": "demo", "input": inputs})
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/embeddings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("   error:", err)
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	fmt.Printf("   -> %s in %s (X-Embedcache-Status: %s)\n", resp.Status, time.Since(start).Round(time.Millisecond), resp.Header.Get("X-Embedcache-Status"))
+}
+
+// runCheck probes a real upstream and prints exactly what -upstream/-upstream-api-key
+// (and, for path quirks like Gemini's OpenAI-compat endpoint, the client base_url)
+// to use — the setup step most first-time backend integrations get wrong.
+func runCheck(args []string) error {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	upstreamURL := fs.String("upstream", "", "base URL of the OpenAI-compatible upstream (required)")
+	apiKey := fs.String("upstream-api-key", os.Getenv("EMBEDCACHE_UPSTREAM_KEY"), "API key for the upstream, if it requires one")
+	model := fs.String("model", "", "model to probe with (required — any model name the upstream serves)")
+	fs.Parse(args)
+
+	if *upstreamURL == "" || *model == "" {
+		return fmt.Errorf("-upstream and -model are required, e.g. embedcache check -upstream http://localhost:11434 -model all-minilm")
+	}
+
+	base := strings.TrimRight(*upstreamURL, "/")
+	body, _ := json.Marshal(map[string]any{"model": *model, "input": "embedcache check probe"})
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/embeddings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if *apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+*apiKey)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("FAIL: could not reach %s: %v\n", base+"/v1/embeddings", err)
+		fmt.Println("  - is the upstream running and reachable from this machine?")
+		fmt.Println("  - if it's a hosted API, check the base URL doesn't already include /v1")
+		return nil
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("FAIL: %s responded %s in %s\n", base+"/v1/embeddings", resp.Status, elapsed.Round(time.Millisecond))
+		fmt.Printf("  body: %.300s\n", raw)
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Println("  - looks like an auth problem: pass -upstream-api-key, or check the key has embeddings access")
+		}
+		if resp.StatusCode == 404 {
+			if strings.Contains(strings.ToLower(string(raw)), "model") {
+				fmt.Printf("  - the upstream doesn't recognize model %q — check the exact model name it serves\n", *model)
+			} else {
+				fmt.Println("  - some providers use a different path (e.g. Gemini's OpenAI-compat endpoint is <base>/v1beta/openai, not <base>/v1)")
+			}
+		}
+		return nil
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding json.RawMessage `json:"embedding"`
+		} `json:"data"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil || len(parsed.Data) == 0 {
+		fmt.Printf("FAIL: %s returned 200 but the body isn't a recognizable /v1/embeddings response\n", base+"/v1/embeddings")
+		fmt.Printf("  body: %.300s\n", raw)
+		return nil
+	}
+	var dims int
+	var f []float64
+	if json.Unmarshal(parsed.Data[0].Embedding, &f) == nil {
+		dims = len(f)
+	}
+
+	fmt.Printf("OK: %s responded 200 in %s\n", base+"/v1/embeddings", elapsed.Round(time.Millisecond))
+	fmt.Printf("  model %q -> %d-dim vectors, usage.total_tokens=%d\n", *model, dims, parsed.Usage.TotalTokens)
+	fmt.Println()
+	fmt.Println("start embedcache with:")
+	if *apiKey != "" {
+		fmt.Printf("  embedcache serve -upstream %s -upstream-api-key %s\n", *upstreamURL, *apiKey)
+	} else {
+		fmt.Printf("  embedcache serve -upstream %s\n", *upstreamURL)
 	}
 	return nil
 }
