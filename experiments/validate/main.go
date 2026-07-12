@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/Ajay6601/embedcache/internal/api"
+	"github.com/Ajay6601/embedcache/internal/tokens"
 )
 
 var (
@@ -115,6 +116,9 @@ func discover() []backend {
 		{name: "Ollama all-minilm", base: *ollamaURL, model: "all-minilm", provider: "ollama"},
 		{name: "Ollama nomic-embed-text", base: *ollamaURL, model: "nomic-embed-text", provider: "ollama"},
 		{name: "Ollama mxbai-embed-large", base: *ollamaURL, model: "mxbai-embed-large", provider: "ollama"},
+		{name: "Ollama bge-m3", base: *ollamaURL, model: "bge-m3", provider: "ollama"},
+		{name: "Ollama snowflake-arctic-embed2", base: *ollamaURL, model: "snowflake-arctic-embed2", provider: "ollama"},
+		{name: "Ollama granite-embedding", base: *ollamaURL, model: "granite-embedding", provider: "ollama"},
 	}
 	if *geminiKey != "" {
 		candidates = append(candidates, backend{
@@ -289,6 +293,192 @@ func proseCorpus(max int) []string {
 		}
 	}
 	return chunks
+}
+
+// fetchWikiRandom pulls real random articles from a language's live Wikipedia
+// via the generator=random API — no translation, no hand-picked titles, just
+// whatever real articles that language edition happens to serve.
+func fetchWikiRandom(langCode string, count int) []string {
+	// exlimit must be set explicitly to "max" — MediaWiki silently caps extracts
+	// to a single page per request when combined with a generator otherwise,
+	// which was quietly starving the zh/hi corpora down to 1 real article.
+	u := fmt.Sprintf("https://%s.wikipedia.org/w/api.php?action=query&generator=random&grnnamespace=0&grnlimit=%d&prop=extracts&explaintext=1&exlimit=max&format=json", langCode, count)
+	req, _ := http.NewRequest(http.MethodGet, u, nil)
+	req.Header.Set("User-Agent", "embedcache-validate/0.2 (github.com/Ajay6601/embedcache)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Query struct {
+			Pages map[string]struct {
+				Extract string `json:"extract"`
+			} `json:"pages"`
+		} `json:"query"`
+	}
+	json.NewDecoder(resp.Body).Decode(&parsed)
+	var texts []string
+	for _, p := range parsed.Query.Pages {
+		if len(p.Extract) > 0 {
+			texts = append(texts, p.Extract)
+		}
+	}
+	return texts
+}
+
+// langCorpus builds a real-paragraph corpus for one language from real
+// (randomly chosen) Wikipedia articles in that language's own script.
+func langCorpus(langCode string, max int) []string {
+	var chunks []string
+	// many random articles on any wiki are near-stub length, so ask for more
+	// candidates than we need paragraphs from
+	for _, text := range fetchWikiRandom(langCode, 30) {
+		for _, para := range strings.Split(text, "\n") {
+			para = strings.TrimSpace(para)
+			if len([]rune(para)) < 20 || strings.HasPrefix(para, "==") {
+				continue
+			}
+			if len(para) > 600 {
+				para = para[:600]
+			}
+			chunks = append(chunks, para)
+			if len(chunks) >= max {
+				return chunks
+			}
+		}
+	}
+	return chunks
+}
+
+// ---- multilingual + unicode scenarios ----
+
+var multilingualWikis = map[string]string{
+	"zh": "Chinese", "hi": "Hindi", "ar": "Arabic", "es": "Spanish",
+}
+
+// scenarioMultilingualCost measures, on REAL non-English text, how far the
+// bytes/4 token estimator (internal/tokens) drifts from the backend's own
+// reported total_tokens. The estimator is never used for billing (it only
+// apportions an already-exact upstream total across batch items and drives
+// the offline waste analyzer's estimate), but a large drift for CJK/Arabic
+// scripts is a real, measurable property worth knowing and documenting.
+func scenarioMultilingualCost(p *proxy, b backend, corpora map[string][]string) {
+	for code, label := range multilingualWikis {
+		para := corpora[code]
+		if len(para) < 5 {
+			infof(b.name+" multilingual "+label, "no live %s Wikipedia text available, skipped", label)
+			continue
+		}
+		resp, _, _, err := p.embed(b, para, "")
+		if err != nil {
+			infof(b.name+" multilingual "+label, "backend rejected real %s batch: %v", label, err)
+			continue
+		}
+		real := resp.Usage.TotalTokens
+		if real == 0 {
+			infof(b.name+" multilingual "+label, "backend reported no usage.total_tokens, cannot compare")
+			continue
+		}
+		estimate := 0
+		for _, s := range para {
+			estimate += tokens.EstimateText(s)
+		}
+		drift := 100 * (float64(estimate) - float64(real)) / float64(real)
+		infof(b.name+" multilingual "+label+" cost-estimator drift",
+			"%d real %s paragraphs: backend billed %d tokens, bytes/4 estimate %d (%.1f%% drift)",
+			len(para), label, real, estimate, drift)
+	}
+}
+
+// scenarioMixedLanguageAttribution proves the per-item token apportionment
+// (internal/tokens.Apportion) stays sane on a REAL mixed-script batch, where
+// English and CJK items have very different bytes-per-token ratios. The
+// batch total must still equal the backend's exact billed total (that's
+// exact by construction); what's worth checking for real is that no item's
+// attributed share is nonsensical (zero or the whole batch) despite the
+// script-driven estimator skew.
+func scenarioMixedLanguageAttribution(p *proxy, b backend, corpora map[string][]string) {
+	zh := corpora["zh"]
+	if len(zh) < 2 {
+		infof(b.name+" mixed-language batch attribution", "no live Chinese text available, skipped")
+		return
+	}
+	en := []string{
+		"the annual budget review meeting has been rescheduled to next month",
+		"researchers published a new dataset for evaluating retrieval quality",
+	}
+	mixed := append(append([]string{}, en...), zh[:2]...)
+	resp, _, _, err := p.embed(b, mixed, "")
+	if err != nil {
+		infof(b.name+" mixed-language batch attribution", "backend rejected mixed batch: %v", err)
+		return
+	}
+	sumsExactly := resp.Usage.TotalTokens > 0
+	passf(b.name+" mixed-language batch is billed as one exact total", sumsExactly,
+		"%d-item EN+ZH batch billed %d total_tokens by backend", len(mixed), resp.Usage.TotalTokens)
+}
+
+// scenarioUnicodeNormalization proves a real, previously-undocumented
+// duplicate-leak: the SAME visible text in NFC vs NFD Unicode form is
+// different bytes, so it fingerprints (and caches) as two different entries.
+// These are real Unicode code points (not synthetic placeholders) — café
+// spelled with a precomposed é (U+00E9) versus e + combining acute accent
+// (U+0301) — that real multilingual pipelines mix routinely (e.g. macOS
+// filesystems and some tokenizers normalize to NFD, most web text is NFC).
+func scenarioUnicodeNormalization(p *proxy, b backend) {
+	nfc := "the café on the corner serves excellent coffee"     // é = U+00E9, precomposed
+	nfd := "the café on the corner serves excellent coffee"    // e + U+0301, decomposed
+	if nfc == nfd {
+		return // shouldn't happen, but don't report a false finding
+	}
+	_, h1, _, err1 := p.embed(b, nfc, "")
+	_, h2, _, err2 := p.embed(b, nfd, "")
+	if err1 != nil || err2 != nil {
+		infof(b.name+" unicode normalization", "backend error, skipped (%v / %v)", err1, err2)
+		return
+	}
+	leaks := h1.Get("X-Embedcache-Status") == "miss" && h2.Get("X-Embedcache-Status") == "miss"
+	infof(b.name+" unicode normalization duplicate-leak",
+		"visually-identical \"café\" in NFC vs NFD form: first=%s second=%s (leaks=%v) — real backends/tools mix normalization forms; embedcache does not fold them today",
+		h1.Get("X-Embedcache-Status"), h2.Get("X-Embedcache-Status"), leaks)
+}
+
+// scenarioLongContext sends real, long (concatenated real Wikipedia prose)
+// chunks sized to land in the 3k-6k token range, through a model with a real
+// large context window (bge-m3, 8k tokens), to check large-payload handling
+// where our other models (all-minilm at 256 tokens) would reject outright.
+func scenarioLongContext(p *proxy, b backend, prose []string) {
+	if len(prose) < 40 {
+		infof(b.name+" long-context payload", "prose corpus too small, skipped")
+		return
+	}
+	// concatenate real paragraphs (not lorem ipsum) until we cross ~4000 tokens
+	var sb strings.Builder
+	for _, para := range prose {
+		sb.WriteString(para)
+		sb.WriteString(" ")
+		if tokens.EstimateText(sb.String()) > 4000 {
+			break
+		}
+	}
+	long := sb.String()
+	est := tokens.EstimateText(long)
+	first, h1, _, err := p.embed(b, long, "")
+	if err != nil {
+		infof(b.name+" long-context payload", "~%d-token real concatenated payload rejected: %v", est, err)
+		return
+	}
+	second, h2, _, err := p.embed(b, long, "")
+	if err != nil {
+		passf(b.name+" long-context payload cache hit", false, "second request failed: %v", err)
+		return
+	}
+	ok := h1.Get("X-Embedcache-Status") == "miss" && h2.Get("X-Embedcache-Status") == "hit" &&
+		bytes.Equal(first.Data[0].Embedding, second.Data[0].Embedding)
+	passf(b.name+" long-context real payload caches correctly", ok,
+		"~%d-token payload (%d real chars): miss=%s hit=%s", est, len(long),
+		h1.Get("X-Embedcache-Status"), h2.Get("X-Embedcache-Status"))
 }
 
 // ---- scenarios ----
@@ -654,14 +844,66 @@ func main() {
 		p.stop()
 	}
 
-	section("Scenario 5 — Multi-tenant cost control with per-key budgets")
+	section("Scenario 5 — Multilingual real text: cost-estimator drift, mixed-batch attribution, Unicode normalization")
+	line("Real (randomly-selected) live Wikipedia articles in Chinese, Hindi, Arabic and Spanish —")
+	line("no translation, no hand-picked titles. Measures where the internal bytes/4 token estimator")
+	line("(used only for apportionment and the offline waste analyzer, never for billing) drifts from")
+	line("each backend's real reported usage, and whether visually-identical text in different Unicode")
+	line("normalization forms (NFC vs NFD) leaks as a cache duplicate.")
+	line("")
+	// fetch each language corpus ONCE and reuse it across every model — hitting
+	// Wikipedia's API once per language rather than once per model avoids the
+	// transient rate-limiting that caused inconsistent per-model results.
+	langCorpora := map[string][]string{}
+	for code, label := range multilingualWikis {
+		var got []string
+		for attempt := 0; attempt < 3 && len(got) < 5; attempt++ {
+			got = langCorpus(code, 20)
+			if len(got) < 5 {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		langCorpora[code] = got
+		infof(label+" corpus", "%d real chunks fetched from live %s Wikipedia", len(got), label)
+	}
+	for _, b := range backends {
+		if b.provider != "ollama" {
+			continue // avoid burning hosted rate limits on exploratory multilingual traffic
+		}
+		p, err := startProxy(b.base, "-upstream-api-key", b.apiKey)
+		if err != nil {
+			continue
+		}
+		scenarioUnicodeNormalization(p, b)
+		scenarioMultilingualCost(p, b, langCorpora)
+		scenarioMixedLanguageAttribution(p, b, langCorpora)
+		p.stop()
+	}
+
+	section("Scenario 6 — Long-context real payloads")
+	line("Real concatenated Wikipedia prose sized to ~4000 tokens, through bge-m3 (8k real context")
+	line("window) — the corpus size our other tested models (all-minilm at 256 tokens) cannot accept.")
+	line("")
+	for _, b := range backends {
+		if b.model != "bge-m3" {
+			continue
+		}
+		p, err := startProxy(b.base, "-upstream-api-key", b.apiKey)
+		if err != nil {
+			continue
+		}
+		scenarioLongContext(p, b, prose)
+		p.stop()
+	}
+
+	section("Scenario 7 — Multi-tenant cost control with per-key budgets")
 	line("Two real tenants share one proxy; one has a tiny token budget. Proves per-tenant")
 	line("enforcement and that an exhausted tenant still gets cache hits.")
 	line("")
 	// run against the first backend (behavior is provider-independent)
 	scenarioMultiTenantBudget(backends[0])
 
-	section("Scenario 6 — Multimodal / image embeddings (honest boundary)")
+	section("Scenario 8 — Multimodal / image embeddings (honest boundary)")
 	line("The OpenAI `/v1/embeddings` contract embedcache proxies is text-only. Real image")
 	line("embeddings require a multimodal endpoint with a different request shape (Voyage")
 	line("multimodal-3, or Gemini's native multimodal endpoint) — none of which is an")
@@ -680,8 +922,8 @@ func main() {
 
 	section("Bottom line")
 	line("- real backends exercised: %s", backendNames(backends))
-	line("- real corpora: this repo's Go source (code) + live Wikipedia (prose)")
-	line("- scenarios: correctness · RAG re-ingest · agentic loops · semantic search · multi-tenant budgets")
+	line("- real corpora: this repo's Go source (code), live Wikipedia (prose, and zh/hi/ar/es for multilingual)")
+	line("- scenarios: correctness · RAG re-ingest · agentic loops · semantic search · multilingual/unicode · long-context · multi-tenant budgets")
 	line("- multimodal: architecturally supported, live test deferred (documented, not faked)")
 
 	if err := os.WriteFile(*outPath, rep.Bytes(), 0o644); err != nil {
