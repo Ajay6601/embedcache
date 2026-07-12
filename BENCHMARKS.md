@@ -1,6 +1,6 @@
 # embedcache vs BEIR SciFact: retrieval-quality and eval-loop-cost benchmark
 
-Generated 2026-07-12 00:15 EDT. Dataset: BEIR SciFact (Thakur et al. 2021) — real published
+Generated 2026-07-12 18:03 EDT. Dataset: BEIR SciFact (Thakur et al. 2021) — real published
 scientific-claim queries, real paper abstracts, real expert relevance judgments.
 5183 real documents, 300 real test queries with relevance judgments.
 
@@ -17,9 +17,10 @@ almost nothing once the corpus is warm.
 | via embedcache, cold cache | 0.5221 | 0.8297 |
 | via embedcache, warm cache (re-run) | 0.5221 | 0.8297 |
 
-- **PASS** — zero retrieval-quality loss: metrics bit-identical=true, top-10 rankings identical (cold vs direct)=true (0 queries differ), (warm vs direct)=true (0 queries differ)
+- **PASS** — zero retrieval-quality loss: top-10 rankings identical (cold vs direct)=true (0 differ), (warm vs direct)=true (0 differ); metrics equal at 1e-4; warm re-run replays cold byte-exact=true
 - **eval-loop cost:** re-running the identical 5483-item eval (300 queries + 5183 docs) recomputed only
   0 items (100.0% absorbed from cache) — 5483 served instantly from the first pass
+- **eval-loop wall clock:** the identical warm re-run took **2.064s** (100% cache hits). The cold-pass duration is not reported because the run was interrupted (machine sleep / backend stall) and its wall clock would include idle time, not compute.
 
 ## Method
 

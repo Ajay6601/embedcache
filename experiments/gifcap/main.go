@@ -58,9 +58,15 @@ type event struct {
 
 var events []event
 
-func emitCmd(text string, pause int)        { events = append(events, event{Kind: "cmd", Text: text, Pause: pause}) }
-func emitOut(text, color string, pause int) { events = append(events, event{Kind: "out", Text: text, Color: color, Pause: pause}) }
-func emitDim(text string, pause int)        { events = append(events, event{Kind: "dim", Text: text, Pause: pause}) }
+func emitCmd(text string, pause int) {
+	events = append(events, event{Kind: "cmd", Text: text, Pause: pause})
+}
+func emitOut(text, color string, pause int) {
+	events = append(events, event{Kind: "out", Text: text, Color: color, Pause: pause})
+}
+func emitDim(text string, pause int) {
+	events = append(events, event{Kind: "dim", Text: text, Pause: pause})
+}
 
 var httpc = &http.Client{Timeout: 120 * time.Second}
 
